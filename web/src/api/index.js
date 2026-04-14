@@ -39,4 +39,55 @@ export default {
   deleteDept: (params = {}) => request.delete('/dept/delete', { params }),
   // auditlog
   getAuditLogList: (params = {}) => request.get('/auditlog/list', { params }),
+  // AI Config
+  getAiConfigList: (params = {}) => request.get('/ai_config/list', { params }),
+  getAiConfig: (params = {}) => request.get('/ai_config/get', { params }),
+  createAiConfig: (data = {}) => request.post('/ai_config/create', data),
+  updateAiConfig: (data = {}) => request.post('/ai_config/update', data),
+  deleteAiConfig: (params = {}) => request.delete('/ai_config/delete', { params }),
+  testAiConfig: (params = {}) => request.post('/ai_config/test', null, { params }),
+  // Knowledge Base
+  getKnowledgeBaseList: (params = {}) => request.get('/knowledge_base/list', { params }),
+  getKnowledgeBase: (params = {}) => request.get('/knowledge_base/get', { params }),
+  createKnowledgeBase: (data = {}) => request.post('/knowledge_base/create', data),
+  updateKnowledgeBase: (data = {}) => request.post('/knowledge_base/update', data),
+  deleteKnowledgeBase: (params = {}) => request.delete('/knowledge_base/delete', { params }),
+  // Document Type
+  getDocumentTypeList: (params = {}) => request.get('/document/type/list', { params }),
+  createDocumentType: (data = {}) => request.post('/document/type/create', data),
+  updateDocumentType: (data = {}) => request.post('/document/type/update', data),
+  deleteDocumentType: (params = {}) => request.delete('/document/type/delete', { params }),
+  // Document
+  getDocumentList: (params = {}) => request.get('/document/list', { params }),
+  getDocument: (params = {}) => request.get('/document/get', { params }),
+  createDocument: (data = {}) => request.post('/document/create', data),
+  updateDocument: (data = {}) => request.post('/document/update', data),
+  deleteDocument: (params = {}) => request.delete('/document/delete', { params }),
+  retryDocument: (params = {}) => request.post('/document/retry', null, { params }),
+  // Agent
+  getAgentList: (params = {}) => request.get('/agent/list', { params }),
+  getAgent: (params = {}) => request.get('/agent/get', { params }),
+  createAgent: (data = {}) => request.post('/agent/create', data),
+  updateAgent: (data = {}) => request.post('/agent/update', data),
+  deleteAgent: (params = {}) => request.delete('/agent/delete', { params }),
+  updateAgentKnowledgeBases: (data = {}) => request.post('/agent/update_knowledge_bases', data),
+  agentChat: (data = {}) => request.post('/agent/chat', data),
+  // Review
+  getReviewList: (params = {}) => request.get('/review/list', { params }),
+  getReview: (params = {}) => request.get('/review/get', { params }),
+  getReviewHistory: (params = {}) => request.get('/review/history', { params }),
+  approveReview: (data = {}) => request.post('/review/approve', data),
+  rejectReview: (data = {}) => request.post('/review/reject', data),
+  // Feishu Bot
+  getFeishuBotList: (params = {}) => request.get('/feishu/bot/list', { params }),
+  getFeishuBot: (params = {}) => request.get('/feishu/bot/get', { params }),
+  createFeishuBot: (data = {}) => request.post('/feishu/bot/create', data),
+  updateFeishuBot: (data = {}) => request.post('/feishu/bot/update', data),
+  deleteFeishuBot: (params = {}) => request.delete('/feishu/bot/delete', { params }),
+  // Conversation
+  getConversationList: (params = {}) => request.get('/feishu/conversations', { params }),
+  getMessageList: (params = {}) => request.get('/feishu/messages', { params }),
+  // Dashboard
+  getDashboardStats: () => request.get('/dashboard/stats'),
+  getDashboardTrends: () => request.get('/dashboard/trends'),
 }

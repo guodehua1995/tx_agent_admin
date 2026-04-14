@@ -162,11 +162,105 @@ async def init_menus():
             ),
         ]
         await Menu.bulk_create(children_menu)
+
+        # --- 知识管理 ---
+        knowledge_menu = await Menu.create(
+            menu_type=MenuType.CATALOG,
+            name="知识管理",
+            path="/rag-knowledge",
+            order=3,
+            parent_id=0,
+            icon="carbon:document",
+            is_hidden=False,
+            component="Layout",
+            keepalive=False,
+            redirect="/rag-knowledge/knowledge-base",
+        )
+        await Menu.bulk_create([
+            Menu(
+                menu_type=MenuType.MENU, name="知识库管理", path="knowledge-base", order=1,
+                parent_id=knowledge_menu.id, icon="carbon:data-base", is_hidden=False,
+                component="/rag/knowledge-base", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="文档类型", path="document-type", order=2,
+                parent_id=knowledge_menu.id, icon="carbon:category", is_hidden=False,
+                component="/rag/document-type", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="文档管理", path="document", order=3,
+                parent_id=knowledge_menu.id, icon="carbon:document-multiple", is_hidden=False,
+                component="/rag/document", keepalive=False,
+            ),
+        ])
+
+        # --- AI应用 ---
+        ai_menu = await Menu.create(
+            menu_type=MenuType.CATALOG,
+            name="AI应用",
+            path="/rag-ai",
+            order=4,
+            parent_id=0,
+            icon="carbon:machine-learning-model",
+            is_hidden=False,
+            component="Layout",
+            keepalive=False,
+            redirect="/rag-ai/ai-config",
+        )
+        await Menu.bulk_create([
+            Menu(
+                menu_type=MenuType.MENU, name="模型配置", path="ai-config", order=1,
+                parent_id=ai_menu.id, icon="carbon:settings-adjust", is_hidden=False,
+                component="/rag/ai-config", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="Agent管理", path="agent", order=2,
+                parent_id=ai_menu.id, icon="carbon:bot", is_hidden=False,
+                component="/rag/agent", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="审核管理", path="review", order=3,
+                parent_id=ai_menu.id, icon="carbon:checkmark-outline", is_hidden=False,
+                component="/rag/review", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="数据看板", path="dashboard", order=4,
+                parent_id=ai_menu.id, icon="carbon:dashboard", is_hidden=False,
+                component="/rag/dashboard", keepalive=False,
+            ),
+        ])
+
+        # --- 飞书集成 ---
+        feishu_menu = await Menu.create(
+            menu_type=MenuType.CATALOG,
+            name="飞书集成",
+            path="/rag-feishu",
+            order=5,
+            parent_id=0,
+            icon="carbon:chat-bot",
+            is_hidden=False,
+            component="Layout",
+            keepalive=False,
+            redirect="/rag-feishu/feishu-bot",
+        )
+        await Menu.bulk_create([
+            Menu(
+                menu_type=MenuType.MENU, name="机器人配置", path="feishu-bot", order=1,
+                parent_id=feishu_menu.id, icon="carbon:connect", is_hidden=False,
+                component="/rag/feishu-bot", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="会话管理", path="conversation", order=2,
+                parent_id=feishu_menu.id, icon="carbon:chat", is_hidden=False,
+                component="/rag/conversation", keepalive=False,
+            ),
+        ])
+
         await Menu.create(
             menu_type=MenuType.MENU,
             name="一级菜单",
             path="/top-menu",
-            order=2,
+            order=10,
             parent_id=0,
             icon="material-symbols:featured-play-list-outline",
             is_hidden=False,
