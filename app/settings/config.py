@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
     DEFAULT_EMBEDDING_DIMENSION: int = 1536
 
+    # LangChain / LLM
+    LLM_PROVIDER: str = "openai"
+    LLM_MODEL_NAME: str = "gpt-4"
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
+    LLM_TEMPERATURE: float = 0.7
+    LLM_MAX_TOKENS: int = 4000
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -16,6 +16,7 @@ from app.models.rag import (
     LLMProviderConfig,
     StructuredResult,
 )
+from app.services.agent_service import agent_service
 from app.services.feishu_service import feishu_service
 from app.services.rag_service import rag_service
 from app.services.structuring import run_structuring
@@ -79,7 +80,8 @@ class DocumentPipeline:
 
         access_token = await feishu_service.get_tenant_access_token(bot_configs.app_id, bot_configs.app_secret)
         content = await feishu_service.fetch_document_content(doc_token, doc_type, access_token)
-        logger.debug(f"Feishu Doc Content: {content}")
+        agent_content =  agent_service.run_agent("doc_to_markdown",doc)
+        logger.info(f"Agent Content: {agent_content}")
         doc.source_meta = {**meta, "feishu_doc_token": doc_token, "feishu_doc_type": doc_type}
         return content
 
