@@ -1,14 +1,19 @@
 <script setup>
-import { h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
+import { computed, h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
 import {
   NButton,
+  NDrawer,
+  NDrawerContent,
+  NEmpty,
   NForm,
   NFormItem,
   NInput,
   NPopconfirm,
   NSelect,
+  NSpin,
   NTag,
 } from 'naive-ui'
+import { useRoute, useRouter } from 'vue-router'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -21,12 +26,31 @@ import api from '@/api'
 
 defineOptions({ name: '文档管理' })
 
+const route = useRoute()
+const router = useRouter()
+
 const $table = ref(null)
 const queryItems = ref({})
 const vPermission = resolveDirective('permission')
 
 const docTypeOptions = ref([])
 const kbOptions = ref([])
+
+// Content drawer state
+const contentDrawerVisible = ref(false)
+const contentDoc = ref(null)
+const contentText = ref('')
+const contentLoading = ref(false)
+const contentSaving = ref(false)
+const isContentEditable = computed(() => contentDoc.value?.status === 'rejected')
+
+function buildSourceMeta(form) {
+  if (form.source_type === 'feishu_doc')
+    return { feishu_url: form.feishu_url || '' }
+  if (form.source_type === 'web_url')
+    return { url: form.web_url || '' }
+  return {}
+}
 
 const {
   modalVisible,
@@ -35,18 +59,85 @@ const {
   modalLoading,
   handleAdd,
   handleDelete,
-  handleEdit,
+  handleEdit: rawHandleEdit,
   handleSave,
   modalForm,
   modalFormRef,
 } = useCRUD({
   name: '文档',
-  initForm: {},
-  doCreate: api.createDocument,
+  initForm: { feishu_url: '', web_url: '' },
+  doCreate: (data) => {
+    const payload = {
+      title: data.title,
+      source_type: data.source_type,
+      doc_type_id: data.doc_type_id,
+      knowledge_base_id: data.knowledge_base_id,
+      source_meta: buildSourceMeta(data),
+    }
+    return api.createDocument(payload)
+  },
   doDelete: api.deleteDocument,
-  doUpdate: api.updateDocument,
+  doUpdate: (data) => {
+    const payload = {
+      id: data.id,
+      title: data.title,
+      doc_type_id: data.doc_type_id,
+      knowledge_base_id: data.knowledge_base_id,
+    }
+    return api.updateDocument(payload)
+  },
   refresh: () => $table.value?.handleSearch(),
 })
+
+function handleEdit(row) {
+  rawHandleEdit(row)
+  const meta = row.source_meta || {}
+  modalForm.value.feishu_url = meta.feishu_url || ''
+  modalForm.value.web_url = meta.url || ''
+}
+
+function handleUploadClick() {
+  $message?.warning('暂不支持上传文档')
+}
+
+async function openContentDrawer(row) {
+  contentDrawerVisible.value = true
+  contentLoading.value = true
+  contentDoc.value = null
+  contentText.value = ''
+  try {
+    const res = await api.getDocument({ document_id: row.id })
+    contentDoc.value = res.data
+    contentText.value = res.data?.content || ''
+  } catch {
+    $message?.error('获取文档内容失败')
+    contentDrawerVisible.value = false
+  } finally {
+    contentLoading.value = false
+  }
+}
+
+async function handleSaveContent() {
+  if (!contentDoc.value) return
+  contentSaving.value = true
+  try {
+    const res = await api.updateDocumentContent({
+      id: contentDoc.value.id,
+      content: contentText.value,
+    })
+    if (res.code === 0) {
+      $message?.success('内容已更新，已重新提交审核')
+      contentDrawerVisible.value = false
+      $table.value?.handleSearch()
+    } else {
+      $message?.error(res.msg || '保存失败')
+    }
+  } catch {
+    $message?.error('保存失败')
+  } finally {
+    contentSaving.value = false
+  }
+}
 
 const sourceTypeOptions = [
   { label: '飞书文档', value: 'feishu_doc' },
@@ -112,6 +203,11 @@ async function handleRetry(row) {
 onMounted(() => {
   loadOptions()
   $table.value?.handleSearch()
+  const editDocId = route.query.edit_doc_id
+  if (editDocId) {
+    openContentDrawer({ id: Number(editDocId) })
+    router.replace({ query: {} })
+  }
 })
 
 const columns = [
@@ -172,11 +268,16 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 220,
+    width: 280,
     align: 'center',
     fixed: 'right',
     render(row) {
       const buttons = [
+        h(
+          NButton,
+          { size: 'small', type: 'info', style: 'margin-right: 8px;', onClick: () => openContentDrawer(row) },
+          { default: () => '查看', icon: renderIcon('material-symbols:visibility-outline', { size: 16 }) }
+        ),
         withDirectives(
           h(
             NButton,
@@ -281,7 +382,16 @@ const columns = [
           <NInput v-model:value="modalForm.title" placeholder="请输入文档标题" />
         </NFormItem>
         <NFormItem label="来源类型" path="source_type" :rule="{ required: true, message: '请选择来源类型', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.source_type" :options="sourceTypeOptions" placeholder="请选择来源类型" />
+          <NSelect v-model:value="modalForm.source_type" :options="sourceTypeOptions" placeholder="请选择来源类型" :disabled="modalAction === 'edit'" />
+        </NFormItem>
+        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'feishu_doc'" label="飞书文档链接" path="feishu_url" :rule="{ required: true, message: '请输入飞书文档链接', trigger: ['input', 'blur'] }">
+          <NInput v-model:value="modalForm.feishu_url" placeholder="请输入飞书云文档URL" />
+        </NFormItem>
+        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'web_url'" label="网页地址" path="web_url" :rule="{ required: true, message: '请输入网页地址', trigger: ['input', 'blur'] }">
+          <NInput v-model:value="modalForm.web_url" placeholder="请输入网页URL" />
+        </NFormItem>
+        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'file_upload'" label="上传文件">
+          <NButton @click="handleUploadClick">选择文件</NButton>
         </NFormItem>
         <NFormItem label="文档类型" path="doc_type_id" :rule="{ required: true, type: 'number', message: '请选择文档类型', trigger: ['change', 'blur'] }">
           <NSelect v-model:value="modalForm.doc_type_id" :options="docTypeOptions" placeholder="请选择文档类型" />
@@ -289,10 +399,46 @@ const columns = [
         <NFormItem label="知识库" path="knowledge_base_id" :rule="{ required: true, type: 'number', message: '请选择知识库', trigger: ['change', 'blur'] }">
           <NSelect v-model:value="modalForm.knowledge_base_id" :options="kbOptions" placeholder="请选择知识库" />
         </NFormItem>
-        <NFormItem label="来源元数据" path="source_meta">
-          <NInput v-model:value="modalForm.source_meta" type="textarea" placeholder="JSON格式的来源元数据 (可选)" :rows="3" />
-        </NFormItem>
       </NForm>
     </CrudModal>
+
+    <!-- Content View/Edit Drawer -->
+    <NDrawer v-model:show="contentDrawerVisible" placement="right" :width="600">
+      <NDrawerContent :title="contentDoc ? `文档内容 - ${contentDoc.title}` : '文档内容'">
+        <NSpin :show="contentLoading">
+          <template v-if="contentDoc">
+            <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              <NTag :type="statusColorMap[contentDoc.status] || 'default'" size="small">
+                {{ statusOptions.find((o) => o.value === contentDoc.status)?.label || contentDoc.status }}
+              </NTag>
+              <span v-if="isContentEditable" style="color: #f0a020; font-size: 13px;">可编辑 - 保存后将重新提交审核</span>
+              <span v-else style="color: #999; font-size: 13px;">只读</span>
+            </div>
+            <NInput
+              v-if="contentDoc.content || isContentEditable"
+              v-model:value="contentText"
+              type="textarea"
+              :rows="20"
+              :disabled="!isContentEditable"
+              placeholder="暂无文档内容"
+              style="font-family: monospace;"
+            />
+            <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+          </template>
+        </NSpin>
+        <template #footer>
+          <NButton
+            v-if="isContentEditable"
+            v-permission="'post/api/v1/document/update_content'"
+            type="primary"
+            :loading="contentSaving"
+            :disabled="!contentText.trim()"
+            @click="handleSaveContent"
+          >
+            保存并提审
+          </NButton>
+        </template>
+      </NDrawerContent>
+    </NDrawer>
   </CommonPage>
 </template>

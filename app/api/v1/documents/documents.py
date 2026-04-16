@@ -7,7 +7,14 @@ from app.controllers.document import document_controller, document_type_controll
 from app.core.ctx import CTX_USER_ID
 from app.models.rag import DocumentType, KnowledgeBase
 from app.schemas.base import Fail, Success, SuccessExtra
-from app.schemas.documents import DocumentCreate, DocumentTypeCreate, DocumentTypeUpdate, DocumentUpdate
+from app.models.enums import DocumentStatus
+from app.schemas.documents import (
+    DocumentCreate,
+    DocumentSubmitForReview,
+    DocumentTypeCreate,
+    DocumentTypeUpdate,
+    DocumentUpdate,
+)
 from app.services.document_pipeline import document_pipeline
 
 logger = logging.getLogger(__name__)
@@ -40,7 +47,7 @@ async def list_document(
     if source_type:
         q &= Q(source_type=source_type)
     total, objs = await document_controller.list(page=page, page_size=page_size, search=q, order=["-created_at"])
-    data = [await obj.to_dict() for obj in objs]
+    data = [await obj.to_dict(exclude_fields=["content"]) for obj in objs]
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
 
 
@@ -90,6 +97,18 @@ async def retry_document(document_id: int = Query(..., description="文档ID"), 
     return Success(msg="已加入重试队列")
 
 
+@router.post("/update_content", summary="编辑文档内容并重新提审")
+async def update_document_content(body: DocumentSubmitForReview):
+    doc = await document_controller.get(id=body.id)
+    if doc.status != DocumentStatus.REJECTED:
+        return Fail(msg="只有被驳回的文档才能编辑内容")
+    doc.content = body.content
+    doc.status = DocumentStatus.PENDING_REVIEW
+    await doc.save()
+    logger.info("[Document] Content updated and resubmitted: id=%s", body.id)
+    return Success(msg="内容已更新，已重新提交审核")
+
+
 # ========== 文档类型 ==========
 
 
@@ -125,5 +144,4 @@ async def update_document_type(type_in: DocumentTypeUpdate):
 async def delete_document_type(type_id: int = Query(..., description="文档类型ID")):
     await document_type_controller.remove(id=type_id)
     logger.info("[DocType] Deleted: id=%s", type_id)
-    return Success(msg="删除成功")
     return Success(msg="删除成功")

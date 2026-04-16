@@ -11,6 +11,7 @@ from .dashboard import dashboard_router
 from .depts import depts_router
 from .documents import documents_router
 from .feishu import feishu_router, webhook_router
+from .global_config import global_config_router
 from .knowledge_bases import knowledge_bases_router
 from .menus import menus_router
 from .reviews import reviews_router
@@ -35,6 +36,7 @@ v1_router.include_router(agents_router, prefix="/agent", dependencies=[DependPer
 v1_router.include_router(ai_config_router, prefix="/ai_config", dependencies=[DependPermission])
 v1_router.include_router(feishu_router, prefix="/feishu", dependencies=[DependPermission])
 v1_router.include_router(dashboard_router, prefix="/dashboard", dependencies=[DependPermission])
+v1_router.include_router(global_config_router, prefix="/global_config", dependencies=[DependPermission])
 
 # 飞书 Webhook（无认证）
 v1_router.include_router(webhook_router, prefix="/feishu")

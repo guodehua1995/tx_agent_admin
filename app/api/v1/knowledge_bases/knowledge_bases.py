@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Query
 from tortoise.expressions import Q
 
+from app.models.rag import LLMProviderConfig
 from app.controllers.knowledge_base import knowledge_base_controller
 from app.schemas.base import Success, SuccessExtra
 from app.schemas.knowledge_bases import *
@@ -57,5 +58,4 @@ async def delete_knowledge_base(kb_id: int = Query(..., description="知识库ID
     await kb.save()
     await Document.filter(knowledge_base_id=kb_id, is_deleted=False).update(is_deleted=True)
     logger.info("[KnowledgeBase] Soft deleted: id=%s", kb_id)
-    return Success(msg="删除成功")
     return Success(msg="删除成功")

@@ -29,7 +29,7 @@ async def list_review(
     else:
         q &= Q(status=DocumentStatus.PENDING_REVIEW)
     total, objs = await document_controller.list(page=page, page_size=page_size, search=q, order=["-created_at"])
-    data = [await obj.to_dict() for obj in objs]
+    data = [await obj.to_dict(exclude_fields=["content"]) for obj in objs]
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
 
 
@@ -109,5 +109,4 @@ async def publish_to_feishu(
     background_tasks: BackgroundTasks = None,
 ):
     background_tasks.add_task(document_pipeline.publish_to_feishu, structured_result_id)
-    return Success(msg="已加入发布队列")
     return Success(msg="已加入发布队列")

@@ -192,6 +192,11 @@ async def init_menus():
                 parent_id=knowledge_menu.id, icon="carbon:document-multiple", is_hidden=False,
                 component="/rag/document", keepalive=False,
             ),
+            Menu(
+                menu_type=MenuType.MENU, name="全局配置", path="global-config", order=4,
+                parent_id=knowledge_menu.id, icon="carbon:settings", is_hidden=False,
+                component="/rag/global-config", keepalive=False,
+            ),
         ])
 
         # --- AI应用 ---
@@ -319,9 +324,44 @@ async def init_roles():
         await user_role.apis.add(*basic_apis)
 
 
+async def init_vector_store():
+    """初始化 PGVector 向量存储"""
+    import psycopg2
+    from app.services.rag_service import rag_service
+
+    try:
+        # 确保 pgvector 表存在
+        conn = psycopg2.connect(
+            host=settings.DB_HOST,
+            port=settings.DB_PORT,
+            database=settings.DB_NAME,
+            user=settings.DB_USER,
+            password=settings.DB_PASSWORD,
+        )
+        cur = conn.cursor()
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS {settings.VECTOR_STORE_TABLE_NAME} (
+                id BIGSERIAL PRIMARY KEY,
+                node_id VARCHAR(255) NOT NULL,
+                text TEXT,
+                metadata_ JSONB,
+                embedding vector({settings.DEFAULT_EMBEDDING_DIMENSION})
+            );
+        """)
+        conn.commit()
+        conn.close()
+        logger.info(f"Vector store table ensured: {settings.VECTOR_STORE_TABLE_NAME}")
+
+        # 初始化 PGVectorStore
+        await rag_service.init_vector_store()
+    except Exception as e:
+        logger.warning(f"Vector store initialization skipped: {e}")
+
+
 async def init_data():
     await init_db()
     await init_superuser()
     await init_menus()
     await init_apis()
     await init_roles()
+    await init_vector_store()

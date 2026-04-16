@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def mask_secret(value: str) -> str:
+    """脱敏: 保留前3后3字符，中间用*代替"""
+    if not value or len(value) <= 6:
+        return "******"
+    return value[:3] + "*" * (len(value) - 6) + value[-3:]
+
+
 # ========== 飞书机器人配置 CRUD ==========
 
 
@@ -25,19 +32,25 @@ async def list_feishu_bot(
     page_size: int = Query(10, description="每页数量"),
 ):
     total, objs = await feishu_bot_controller.list(page=page, page_size=page_size, order=["-created_at"])
-    data = [await obj.to_dict(exclude_fields=["app_secret"]) for obj in objs]
+    data = []
+    for obj in objs:
+        d = await obj.to_dict()
+        d["app_secret"] = mask_secret(d.get("app_secret", ""))
+        data.append(d)
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
 
 
 @router.get("/bot/get", summary="飞书机器人详情")
 async def get_feishu_bot(bot_id: int = Query(..., description="机器人ID")):
     obj = await feishu_bot_controller.get(id=bot_id)
-    return Success(data=await obj.to_dict(exclude_fields=["app_secret"]))
+    data = await obj.to_dict()
+    data["app_secret"] = mask_secret(data.get("app_secret", ""))
+    return Success(data=data)
 
 
 @router.post("/bot/create", summary="创建飞书机器人配置")
 async def create_feishu_bot(bot_in: FeishuBotConfigCreate):
-    if not await Agent.exists(id=bot_in.agent_id):
+    if bot_in.agent_id is not None and not await Agent.exists(id=bot_in.agent_id):
         return Fail(msg="绑定的Agent不存在")
     await feishu_bot_controller.create(bot_in)
     logger.info("[FeishuBot] Created: name=%s", bot_in.name)
@@ -48,7 +61,11 @@ async def create_feishu_bot(bot_in: FeishuBotConfigCreate):
 async def update_feishu_bot(bot_in: FeishuBotConfigUpdate):
     if bot_in.agent_id is not None and not await Agent.exists(id=bot_in.agent_id):
         return Fail(msg="绑定的Agent不存在")
-    await feishu_bot_controller.update(id=bot_in.id, obj_in=bot_in)
+    update_data = bot_in.model_dump(exclude_unset=True, exclude={"id"})
+    # 脱敏值含*号，说明用户未修改，不更新app_secret
+    if "app_secret" in update_data and "*" in (update_data["app_secret"] or ""):
+        del update_data["app_secret"]
+    await feishu_bot_controller.update(id=bot_in.id, obj_in=update_data)
     logger.info("[FeishuBot] Updated: id=%s", bot_in.id)
     return Success(msg="更新成功")
 
