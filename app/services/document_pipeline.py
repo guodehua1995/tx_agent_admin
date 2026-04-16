@@ -1,4 +1,3 @@
-import logging
 import time
 
 from app.controllers.ai_config import ai_config_controller
@@ -8,6 +7,7 @@ from app.controllers.feishu_bot import feishu_bot_controller
 from app.controllers.review import review_controller
 from app.models.admin import User
 from app.models.enums import DocumentSourceType, DocumentStatus, FeishuPublishStatus
+from app.models.global_config import GlobalConfig
 from app.models.rag import (
     Agent,
     ChatMessage,
@@ -21,7 +21,7 @@ from app.services.rag_service import rag_service
 from app.services.structuring import run_structuring
 from app.settings import settings
 
-logger = logging.getLogger(__name__)
+from app.log import logger
 
 
 class DocumentPipeline:
@@ -55,13 +55,13 @@ class DocumentPipeline:
             # 3. 进入待审核
             doc.status = DocumentStatus.PENDING_REVIEW
             await doc.save()
-            logger.info("Document processed: id=%s, status=pending_review", doc_id)
+            logger.info(f"Document processed: id={doc_id}, status=pending_review")
 
         except Exception as e:
             doc.status = DocumentStatus.FAILED
             doc.error_message = str(e)
             await doc.save()
-            logger.error("Document processing failed: id=%s, error=%s", doc_id, e)
+            logger.error(f"Document processing failed: id={doc_id}, error={e}")
 
     async def _fetch_feishu_content(self, doc: Document) -> str:
         """从飞书拉取文档内容"""
@@ -70,8 +70,10 @@ class DocumentPipeline:
         doc_token, doc_type = feishu_service.parse_feishu_url(feishu_url)
 
         # 需要通过某个飞书机器人的凭证获取 token
-        # 这里使用第一个可用的飞书机器人配置
-        bot_configs = await feishu_bot_controller.model.filter(is_active=True).first()
+        global_config = await GlobalConfig.get(config_key="feishu_pull_bot")
+        if not global_config:
+            raise ValueError("没有配置飞书拉取机器人")
+        bot_configs = await feishu_bot_controller.get_by_app_id(app_id=global_config.config_value)
         if not bot_configs:
             raise ValueError("没有可用的飞书机器人配置")
 
@@ -127,7 +129,9 @@ class DocumentPipeline:
 
     async def vectorize_document(self, doc_id: int):
         """审核通过后: 确定最终内容 → LlamaIndex 入库"""
+
         doc = await Document.get(id=doc_id)
+        logger.info(f"Vectorizing document: id={doc_id}, name={doc.title}")
         try:
             doc.status = DocumentStatus.VECTORIZING
             await doc.save()
@@ -154,13 +158,13 @@ class DocumentPipeline:
 
             doc.status = DocumentStatus.COMPLETED
             await doc.save()
-            logger.info("Document vectorized: id=%s", doc_id)
+            logger.info(f"Document vectorized: id={doc_id}")
 
         except Exception as e:
             doc.status = DocumentStatus.FAILED
             doc.error_message = str(e)
             await doc.save()
-            logger.error("Document vectorization failed: id=%s, error=%s", doc_id, e)
+            logger.error(f"Document vectorization failed: id={doc_id}, error={e}")
 
     async def publish_to_feishu(self, structured_result_id: int):
         """将结构化结果发布到飞书云文档"""
@@ -186,12 +190,12 @@ class DocumentPipeline:
             result.feishu_publish_status = FeishuPublishStatus.PUBLISHED
             result.feishu_publish_url = url
             await result.save()
-            logger.info("Published to Feishu: result_id=%s, url=%s", structured_result_id, url)
+            logger.info(f"Published to Feishu: result_id={structured_result_id}, url={url}")
 
         except Exception as e:
             result.feishu_publish_status = FeishuPublishStatus.FAILED
             await result.save()
-            logger.error("Feishu publish failed: result_id=%s, error=%s", structured_result_id, e)
+            logger.error(f"Feishu publish failed: result_id={structured_result_id}, error={e}")
 
     async def handle_bot_message(self, bot_id: int, feishu_open_id: str, chat_id: str, question: str) -> dict:
         """飞书机器人消息处理"""

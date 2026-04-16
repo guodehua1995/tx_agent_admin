@@ -64,6 +64,7 @@ export default {
   updateDocument: (data = {}) => request.post('/document/update', data),
   deleteDocument: (params = {}) => request.delete('/document/delete', { params }),
   retryDocument: (params = {}) => request.post('/document/retry', null, { params }),
+  updateDocumentContent: (data = {}) => request.post('/document/update_content', data),
   // Agent
   getAgentList: (params = {}) => request.get('/agent/list', { params }),
   getAgent: (params = {}) => request.get('/agent/get', { params }),
@@ -90,4 +91,12 @@ export default {
   // Dashboard
   getDashboardStats: () => request.get('/dashboard/stats'),
   getDashboardTrends: () => request.get('/dashboard/trends'),
+  // Global Config
+  getGlobalConfigList: (params = {}) => request.get('/global_config/list', { params }),
+  getGlobalConfigGrouped: () => request.get('/global_config/grouped'),
+  getGlobalConfig: (params = {}) => request.get('/global_config/get', { params }),
+  createGlobalConfig: (data = {}) => request.post('/global_config/create', data),
+  updateGlobalConfig: (data = {}) => request.post('/global_config/update', data),
+  batchUpdateGlobalConfig: (data = {}) => request.post('/global_config/batch_update', data),
+  deleteGlobalConfig: (params = {}) => request.delete('/global_config/delete', { params }),
 }

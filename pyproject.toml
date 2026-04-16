@@ -72,6 +72,8 @@ dependencies = [
     "uvloop==0.21.0 ; sys_platform != 'win32'",
     "llama-index-core>=0.12.0",
     "llama-index-vector-stores-postgres>=0.4.0",
+    "psycopg2-binary>=2.9.0",
+    "pgvector>=0.4.0",
     "llama-index-llms-openai-like>=0.3.0",
     "llama-index-embeddings-openai>=0.3.0",
     "tiktoken>=0.7.0",

@@ -30,7 +30,7 @@ class FeishuService:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{self._base_url}/docx/v1/documents/{doc_token}/raw_content",
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {access_token}","doc_type": "docx","content_type": "markdown"},
             )
             data = resp.json()
             if data.get("code") != 0:

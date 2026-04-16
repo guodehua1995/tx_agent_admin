@@ -218,8 +218,8 @@ const columns = [
         <NFormItem label="API地址" path="api_base_url" :rule="{ required: true, message: '请输入API地址', trigger: ['input', 'blur'] }">
           <NInput v-model:value="modalForm.api_base_url" placeholder="请输入API地址" />
         </NFormItem>
-        <NFormItem label="API密钥" path="api_key" :rule="{ required: true, message: '请输入API密钥', trigger: ['input', 'blur'] }">
-          <NInput v-model:value="modalForm.api_key" type="password" show-password-on="click" placeholder="请输入API密钥" />
+        <NFormItem label="API密钥" path="api_key" :rule="modalAction === 'add' ? { required: true, message: '请输入API密钥', trigger: ['input', 'blur'] } : undefined">
+          <NInput v-model:value="modalForm.api_key" type="password" show-password-on="click" :placeholder="modalAction === 'edit' ? '不修改请保持原值' : '请输入API密钥'" />
         </NFormItem>
         <NFormItem label="模型标识" path="model_name" :rule="{ required: true, message: '请输入模型标识', trigger: ['input', 'blur'] }">
           <NInput v-model:value="modalForm.model_name" placeholder="请输入模型标识" />

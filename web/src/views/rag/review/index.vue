@@ -7,13 +7,16 @@ import {
   NDescriptionsItem,
   NDrawer,
   NDrawerContent,
+  NEmpty,
   NInput,
   NSelect,
   NSpace,
+  NSpin,
   NTag,
   NTimeline,
   NTimelineItem,
 } from 'naive-ui'
+import { useRouter } from 'vue-router'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -23,6 +26,8 @@ import { formatDate, renderIcon } from '@/utils'
 import api from '@/api'
 
 defineOptions({ name: '审核管理' })
+
+const router = useRouter()
 
 const $table = ref(null)
 const queryItems = ref({})
@@ -43,19 +48,31 @@ const statusColorMap = {
 // Review drawer state
 const drawerVisible = ref(false)
 const reviewDoc = ref(null)
+const reviewDocContent = ref('')
 const reviewHistory = ref([])
 const reviewComment = ref('')
 const reviewLoading = ref(false)
+const drawerContentLoading = ref(false)
 
 async function openReviewDrawer(row) {
   drawerVisible.value = true
   reviewDoc.value = row
+  reviewDocContent.value = ''
   reviewComment.value = ''
+  reviewHistory.value = []
+  drawerContentLoading.value = true
   try {
-    const res = await api.getReviewHistory({ document_id: row.id })
-    reviewHistory.value = res.data || []
+    const [docRes, histRes] = await Promise.all([
+      api.getDocument({ document_id: row.id }),
+      api.getReviewHistory({ document_id: row.id }),
+    ])
+    reviewDoc.value = docRes.data
+    reviewDocContent.value = docRes.data?.content || ''
+    reviewHistory.value = histRes.data || []
   } catch {
     reviewHistory.value = []
+  } finally {
+    drawerContentLoading.value = false
   }
 }
 
@@ -100,6 +117,28 @@ async function handleReject() {
     }
   } catch {
     $message?.error('操作失败')
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+async function handleEditFromReview() {
+  if (!reviewDoc.value) return
+  reviewLoading.value = true
+  try {
+    const res = await api.rejectReview({
+      document_id: reviewDoc.value.id,
+      action: 'reject',
+      comment: '审核人转为编辑，自动驳回',
+    })
+    if (res.code === 0) {
+      drawerVisible.value = false
+      router.push({ path: '/rag-knowledge/document', query: { edit_doc_id: reviewDoc.value.id } })
+    } else {
+      $message?.error(res.msg || '驳回失败，无法跳转编辑')
+    }
+  } catch {
+    $message?.error('驳回失败，无法跳转编辑')
   } finally {
     reviewLoading.value = false
   }
@@ -224,61 +263,84 @@ const columns = [
     </CrudTable>
 
     <!-- Review Detail Drawer -->
-    <NDrawer v-model:show="drawerVisible" placement="right" :width="500">
+    <NDrawer v-model:show="drawerVisible" placement="right" :width="600">
       <NDrawerContent title="审核详情">
-        <template v-if="reviewDoc">
-          <NDescriptions label-placement="left" :column="1" bordered size="small">
-            <NDescriptionsItem label="文档标题">{{ reviewDoc.title }}</NDescriptionsItem>
-            <NDescriptionsItem label="来源类型">{{ reviewDoc.source_type }}</NDescriptionsItem>
-            <NDescriptionsItem label="状态">
-              <NTag :type="statusColorMap[reviewDoc.status] || 'default'" size="small">
-                {{ statusOptions.find((o) => o.value === reviewDoc.status)?.label || reviewDoc.status }}
-              </NTag>
-            </NDescriptionsItem>
-            <NDescriptionsItem label="创建日期">{{ formatDate(reviewDoc.created_at) }}</NDescriptionsItem>
-          </NDescriptions>
+        <NSpin :show="drawerContentLoading">
+          <template v-if="reviewDoc">
+            <NDescriptions label-placement="left" :column="1" bordered size="small">
+              <NDescriptionsItem label="文档标题">{{ reviewDoc.title }}</NDescriptionsItem>
+              <NDescriptionsItem label="来源类型">{{ reviewDoc.source_type }}</NDescriptionsItem>
+              <NDescriptionsItem label="状态">
+                <NTag :type="statusColorMap[reviewDoc.status] || 'default'" size="small">
+                  {{ statusOptions.find((o) => o.value === reviewDoc.status)?.label || reviewDoc.status }}
+                </NTag>
+              </NDescriptionsItem>
+              <NDescriptionsItem label="创建日期">{{ formatDate(reviewDoc.created_at) }}</NDescriptionsItem>
+            </NDescriptions>
 
-          <NCard title="审核历史" size="small" style="margin-top: 16px" v-if="reviewHistory.length">
-            <NTimeline>
-              <NTimelineItem
-                v-for="(item, idx) in reviewHistory"
-                :key="idx"
-                :type="item.action === 'approve' ? 'success' : 'error'"
-                :title="item.action === 'approve' ? '通过' : '拒绝'"
-                :content="item.comment || '无备注'"
-                :time="formatDate(item.created_at)"
+            <NCard title="文档内容" size="small" style="margin-top: 16px">
+              <NInput
+                v-if="reviewDocContent"
+                :value="reviewDocContent"
+                type="textarea"
+                :rows="12"
+                readonly
+                style="font-family: monospace;"
               />
-            </NTimeline>
-          </NCard>
+              <NEmpty v-else description="暂无文档内容" />
+            </NCard>
 
-          <div v-if="reviewDoc.status === 'pending_review'" style="margin-top: 16px">
-            <NInput
-              v-model:value="reviewComment"
-              type="textarea"
-              placeholder="审核意见 (可选)"
-              :rows="3"
-              style="margin-bottom: 12px"
-            />
-            <NSpace>
-              <NButton
-                v-permission="'post/api/v1/review/approve'"
-                type="success"
-                :loading="reviewLoading"
-                @click="handleApprove"
-              >
-                通过
-              </NButton>
-              <NButton
-                v-permission="'post/api/v1/review/reject'"
-                type="error"
-                :loading="reviewLoading"
-                @click="handleReject"
-              >
-                拒绝
-              </NButton>
-            </NSpace>
-          </div>
-        </template>
+            <NCard title="审核历史" size="small" style="margin-top: 16px" v-if="reviewHistory.length">
+              <NTimeline>
+                <NTimelineItem
+                  v-for="(item, idx) in reviewHistory"
+                  :key="idx"
+                  :type="item.action === 'approve' ? 'success' : 'error'"
+                  :title="item.action === 'approve' ? '通过' : '拒绝'"
+                  :content="item.comment || '无备注'"
+                  :time="formatDate(item.created_at)"
+                />
+              </NTimeline>
+            </NCard>
+
+            <div v-if="reviewDoc.status === 'pending_review'" style="margin-top: 16px">
+              <NInput
+                v-model:value="reviewComment"
+                type="textarea"
+                placeholder="审核意见 (可选)"
+                :rows="3"
+                style="margin-bottom: 12px"
+              />
+              <NSpace>
+               <!-- <NButton
+                  v-permission="'post/api/v1/review/reject'"
+                  type="warning"
+                  :loading="reviewLoading"
+                  @click="handleEditFromReview"
+                >
+                  编辑
+                </NButton>-->
+              
+                <NButton
+                  v-permission="'post/api/v1/review/approve'"
+                  type="success"
+                  :loading="reviewLoading"
+                  @click="handleApprove"
+                >
+                  通过
+                </NButton>
+                <NButton
+                  v-permission="'post/api/v1/review/reject'"
+                  type="error"
+                  :loading="reviewLoading"
+                  @click="handleReject"
+                >
+                  拒绝
+                </NButton>
+              </NSpace>
+            </div>
+          </template>
+        </NSpin>
       </NDrawerContent>
     </NDrawer>
   </CommonPage>

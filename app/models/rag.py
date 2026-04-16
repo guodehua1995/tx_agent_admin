@@ -120,7 +120,7 @@ class FeishuBotConfig(BaseModel, TimestampMixin):
     app_secret = fields.CharField(max_length=500, description="飞书应用密钥")
     verification_token = fields.CharField(max_length=500, null=True, description="事件验证token")
     encrypt_key = fields.CharField(max_length=500, null=True, description="事件加密key")
-    agent_id = fields.IntField(description="绑定Agent ID -> agent.id", index=True)
+    agent_id = fields.IntField(description="绑定Agent ID -> agent.id", null=True, index=True)
     is_active = fields.BooleanField(default=True, description="是否启用")
 
     class Meta:

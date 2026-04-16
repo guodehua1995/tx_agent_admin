@@ -9,7 +9,7 @@ class FeishuBotConfigCreate(BaseModel):
     app_secret: str = Field(..., description="飞书应用密钥")
     verification_token: Optional[str] = Field(None, description="事件验证token")
     encrypt_key: Optional[str] = Field(None, description="事件加密key")
-    agent_id: int = Field(..., description="绑定Agent ID")
+    agent_id: Optional[int] = Field(None, description="绑定Agent ID")
     is_active: bool = Field(True, description="是否启用")
 
 

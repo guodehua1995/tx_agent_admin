@@ -34,3 +34,9 @@ class DocumentUpdate(BaseModel):
     source_meta: Optional[dict] = None
     doc_type_id: Optional[int] = None
     knowledge_base_id: Optional[int] = None
+    content: Optional[str] = None
+
+
+class DocumentSubmitForReview(BaseModel):
+    id: int = Field(..., description="文档ID")
+    content: str = Field(..., description="文档内容")

@@ -1,0 +1,9 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Collecting asyncpg
+  Downloading https://pypi.tuna.tsinghua.edu.cn/packages/b5/f0/f2ed1de154e15b107dc692262395b3c17fc34eafe2a78fc2115931561730/asyncpg-0.31.0-cp312-cp312-win_amd64.whl (597 kB)
+     -------------------------------------- 597.2/597.2 kB 1.6 MB/s eta 0:00:00
+Installing collected packages: asyncpg
+Successfully installed asyncpg-0.31.0
+
+[notice] A new release of pip is available: 25.1.1 -> 26.0.1
+[notice] To update, run: python.exe -m pip install --upgrade pip

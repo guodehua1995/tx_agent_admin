@@ -176,8 +176,8 @@ const columns = [
         <NFormItem label="App ID" path="app_id" :rule="{ required: true, message: '请输入App ID', trigger: ['input', 'blur'] }">
           <NInput v-model:value="modalForm.app_id" placeholder="请输入飞书应用ID" />
         </NFormItem>
-        <NFormItem label="App Secret" path="app_secret" :rule="{ required: true, message: '请输入App Secret', trigger: ['input', 'blur'] }">
-          <NInput v-model:value="modalForm.app_secret" type="password" show-password-on="click" placeholder="请输入飞书应用密钥" />
+        <NFormItem label="App Secret" path="app_secret" :rule="modalAction === 'add' ? { required: true, message: '请输入App Secret', trigger: ['input', 'blur'] } : undefined">
+          <NInput v-model:value="modalForm.app_secret" type="password" show-password-on="click" :placeholder="modalAction === 'edit' ? '不修改请保持原值' : '请输入飞书应用密钥'" />
         </NFormItem>
         <NFormItem label="验证Token" path="verification_token">
           <NInput v-model:value="modalForm.verification_token" placeholder="事件验证Token (可选)" />
@@ -185,8 +185,8 @@ const columns = [
         <NFormItem label="加密Key" path="encrypt_key">
           <NInput v-model:value="modalForm.encrypt_key" placeholder="事件加密Key (可选)" />
         </NFormItem>
-        <NFormItem label="绑定Agent" path="agent_id" :rule="{ required: true, type: 'number', message: '请选择Agent', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.agent_id" :options="agentOptions" placeholder="请选择绑定的Agent" />
+        <NFormItem label="绑定Agent" path="agent_id">
+          <NSelect v-model:value="modalForm.agent_id" :options="agentOptions" placeholder="请选择绑定的Agent (可选)" clearable />
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />

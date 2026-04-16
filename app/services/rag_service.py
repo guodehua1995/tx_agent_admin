@@ -1,9 +1,6 @@
-import logging
-
+from app.log import logger
 from app.models.rag import KnowledgeBase, LLMProviderConfig
 from app.settings import settings
-
-logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -27,7 +24,7 @@ class RAGService:
             hybrid_search=True,
             perform_setup=True,
         )
-        logger.info("PGVectorStore initialized: table=%s", settings.VECTOR_STORE_TABLE_NAME)
+        logger.info(f"PGVectorStore initialized: table={settings.VECTOR_STORE_TABLE_NAME}")
 
     def _build_llm(self, config: LLMProviderConfig):
         """根据数据库配置动态构建 LLM 实例"""
@@ -52,6 +49,7 @@ class RAGService:
             api_key=config.api_key,
             model_name=config.model_name,
             embed_batch_size=10,
+            dimensions=settings.DEFAULT_EMBEDDING_DIMENSION,
         )
 
     def _build_node_parser(self, kb: KnowledgeBase):
@@ -86,13 +84,13 @@ class RAGService:
             vector_store=self._vector_store,
         )
         await pipeline.arun(documents=[llama_doc])
-        logger.info("Document ingested: doc_id=%s, kb=%s", doc_id, kb.name)
+        logger.info(f"Document ingested: doc_id={doc_id}, kb={kb.name}")
 
     async def delete_document(self, doc_id: str):
         """删除文档的所有向量"""
         if self._vector_store:
             await self._vector_store.adelete(doc_id)
-            logger.info("Document vectors deleted: doc_id=%s", doc_id)
+            logger.info(f"Document vectors deleted: doc_id={doc_id}")
 
     async def delete_by_knowledge_base(self, kb_id: int):
         """删除知识库所有向量"""
@@ -104,7 +102,7 @@ class RAGService:
         filters = MetadataFilters(filters=[ExactMatchFilter(key="knowledge_base_id", value=str(kb_id))])
         if self._vector_store:
             await self._vector_store.adelete(filters=filters)
-            logger.info("Knowledge base vectors deleted: kb_id=%s", kb_id)
+            logger.info(f"Knowledge base vectors deleted: kb_id={kb_id}")
 
     async def query(
         self,
@@ -232,7 +230,7 @@ class RAGService:
                 await llm.acomplete("Hello")
             return True
         except Exception as e:
-            logger.error("Model connection test failed: %s", e)
+            logger.error(f"Model connection test failed: {e}")
             return False
 
 
