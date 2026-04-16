@@ -242,3 +242,10 @@ pnpm dev
 ### Visitors Count
 
 <img align="left" src = "https://profile-counter.glitch.me/vue-fastapi-admin/count.svg" alt="Loading">
+
+
+# 以下为二次开发记录
+agent实现框架 langchain
+数据库 pgsql18
+rag实现框架LlamaIndex
+
