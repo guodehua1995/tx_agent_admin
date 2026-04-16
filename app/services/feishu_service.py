@@ -3,6 +3,7 @@ import logging
 import httpx
 
 from app.settings import settings
+from app.utils.feishu_doc_parser import FeishuDocParser
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +30,16 @@ class FeishuService:
         """拉取飞书云文档内容"""
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{self._base_url}/docx/v1/documents/{doc_token}/raw_content",
-                headers={"Authorization": f"Bearer {access_token}","doc_type": "docx","content_type": "markdown"},
+                f"{self._base_url}/docx/v1/documents/{doc_token}/blocks",
+                headers={"Authorization": f"Bearer {access_token}"},
             )
+            logger.info(f"Feishu Doc Content: {resp}")
             data = resp.json()
+           
             if data.get("code") != 0:
                 raise Exception(f"拉取飞书文档失败: {data.get('msg')}")
-            return data.get("data", {}).get("content", "")
+            fs_dco_parser = FeishuDocParser()
+            return fs_dco_parser.parse(data.get("data", {}).get("items", []))
 
     async def send_message(
         self, app_id: str, app_secret: str, chat_id: str, content: str, msg_type: str = "interactive"
