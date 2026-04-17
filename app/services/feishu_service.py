@@ -29,8 +29,12 @@ class FeishuService:
     async def fetch_document_content(self, doc_token: str, doc_type: str, access_token: str) -> str:
         """拉取飞书云文档内容"""
         async with httpx.AsyncClient() as client:
+            # resp = await client.get(
+            #     f"{self._base_url}/docx/v1/documents/{doc_token}/blocks",
+            #     headers={"Authorization": f"Bearer {access_token}"},
+            # )
             resp = await client.get(
-                f"{self._base_url}/docx/v1/documents/{doc_token}/blocks",
+                f"{self._base_url}/docx/v1/documents/{doc_token}/raw_content",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             logger.info(f"Feishu Doc Content: {resp}")
@@ -38,8 +42,10 @@ class FeishuService:
            
             if data.get("code") != 0:
                 raise Exception(f"拉取飞书文档失败: {data.get('msg')}")
-            fs_dco_parser = FeishuDocParser()
-            return fs_dco_parser.parse(data.get("data", {}).get("items", []))
+            # TODO 验证agent结构化飞书数据 如果成立将parse删除
+            # fs_dco_parser = FeishuDocParser()
+            # return fs_dco_parser.parse(data.get("data", {}).get("items", []))
+            return data.get("data", {}).get("content", "")
 
     async def send_message(
         self, app_id: str, app_secret: str, chat_id: str, content: str, msg_type: str = "interactive"

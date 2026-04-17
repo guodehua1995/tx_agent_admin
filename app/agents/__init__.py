@@ -8,6 +8,9 @@ from .base import BaseAgent
 from .registry import AgentRegistry, register_agent
 from .executor import agent_executor
 
+# 导入所有 Agent 实现以触发注册
+from . import agents
+
 __all__ = [
     "BaseAgent",
     "AgentRegistry",
