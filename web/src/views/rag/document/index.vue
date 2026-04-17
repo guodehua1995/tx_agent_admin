@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
+import { computed, h, nextTick, onMounted, ref, resolveDirective, withDirectives } from 'vue'
 import {
   NButton,
   NDrawer,
@@ -14,6 +14,8 @@ import {
   NTag,
 } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
+import Vditor from 'vditor'
+import 'vditor/dist/index.css'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -42,7 +44,15 @@ const contentDoc = ref(null)
 const contentText = ref('')
 const contentLoading = ref(false)
 const contentSaving = ref(false)
-const isContentEditable = computed(() => contentDoc.value?.status === 'rejected')
+const vditorContainer = ref(null)
+const previewContainer = ref(null)
+let vditorInstance = null
+
+// 判断是否为飞书文档
+const isFeishuDoc = computed(() => contentDoc.value?.source_type === 'feishu_doc')
+
+// 飞书文档可编辑，或状态为 rejected 时可编辑
+const isContentEditable = computed(() => isFeishuDoc.value || contentDoc.value?.status === 'rejected')
 
 function buildSourceMeta(form) {
   if (form.source_type === 'feishu_doc')
@@ -105,10 +115,32 @@ async function openContentDrawer(row) {
   contentLoading.value = true
   contentDoc.value = null
   contentText.value = ''
+  // 销毁之前的 vditor 实例
+  if (vditorInstance) {
+    vditorInstance.destroy()
+    vditorInstance = null
+  }
   try {
     const res = await api.getDocument({ document_id: row.id })
     contentDoc.value = res.data
     contentText.value = res.data?.content || ''
+    // 如果是飞书文档且可编辑，初始化 vditor
+    if (isFeishuDoc.value && isContentEditable.value) {
+      nextTick(() => {
+        initVditor()
+      })
+    }
+    // 如果是飞书文档但不可编辑，渲染预览
+    if (isFeishuDoc.value && !isContentEditable.value && contentText.value) {
+      nextTick(() => {
+        if (previewContainer.value) {
+          Vditor.preview(previewContainer.value, contentText.value, {
+            mode: 'light',
+            theme: { current: 'light' }
+          })
+        }
+      })
+    }
   } catch {
     $message?.error('获取文档内容失败')
     contentDrawerVisible.value = false
@@ -117,8 +149,42 @@ async function openContentDrawer(row) {
   }
 }
 
+function initVditor() {
+  if (!vditorContainer.value) return
+  vditorInstance = new Vditor(vditorContainer.value, {
+    height: 500,
+    mode: 'ir', // 即时渲染模式（所见即所得）
+    value: contentText.value,
+    placeholder: '请输入 Markdown 内容...',
+    toolbar: [
+      'headings', 'bold', 'italic', 'strike', '|',
+      'line', 'quote', 'list', 'ordered-list', 'check', '|',
+      'code', 'inline-code', 'insert-before', 'insert-after', '|',
+      'upload', 'link', 'table', '|',
+      'undo', 'redo', '|',
+      'fullscreen', 'preview', 'help'
+    ],
+    toolbarConfig: {
+      pin: true
+    },
+    cache: {
+      enable: false
+    },
+    after: () => {
+      // 编辑器初始化完成
+    },
+    input: (value) => {
+      contentText.value = value
+    }
+  })
+}
+
 async function handleSaveContent() {
   if (!contentDoc.value) return
+  // 如果是 vditor 编辑器，获取最新内容
+  if (vditorInstance && isFeishuDoc.value) {
+    contentText.value = vditorInstance.getValue()
+  }
   contentSaving.value = true
   try {
     const res = await api.updateDocumentContent({
@@ -403,7 +469,7 @@ const columns = [
     </CrudModal>
 
     <!-- Content View/Edit Drawer -->
-    <NDrawer v-model:show="contentDrawerVisible" placement="right" :width="600">
+    <NDrawer v-model:show="contentDrawerVisible" placement="right" :width="800">
       <NDrawerContent :title="contentDoc ? `文档内容 - ${contentDoc.title}` : '文档内容'">
         <NSpin :show="contentLoading">
           <template v-if="contentDoc">
@@ -411,19 +477,41 @@ const columns = [
               <NTag :type="statusColorMap[contentDoc.status] || 'default'" size="small">
                 {{ statusOptions.find((o) => o.value === contentDoc.status)?.label || contentDoc.status }}
               </NTag>
+              <NTag v-if="isFeishuDoc" type="info" size="small">飞书文档</NTag>
               <span v-if="isContentEditable" style="color: #f0a020; font-size: 13px;">可编辑 - 保存后将重新提交审核</span>
               <span v-else style="color: #999; font-size: 13px;">只读</span>
             </div>
-            <NInput
-              v-if="contentDoc.content || isContentEditable"
-              v-model:value="contentText"
-              type="textarea"
-              :rows="20"
-              :disabled="!isContentEditable"
-              placeholder="暂无文档内容"
-              style="font-family: monospace;"
-            />
-            <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+
+            <!-- 飞书文档使用 Vditor 编辑器 -->
+            <template v-if="isFeishuDoc">
+              <!-- 编辑模式：所见即所得 -->
+              <div
+                v-if="isContentEditable"
+                ref="vditorContainer"
+                style="min-height: 500px;"
+              />
+              <!-- 预览模式 -->
+              <div
+                v-else-if="contentDoc.content"
+                ref="previewContainer"
+                class="vditor-preview"
+              />
+              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+            </template>
+
+            <!-- 非飞书文档使用普通文本框 -->
+            <template v-else>
+              <NInput
+                v-if="contentDoc.content || isContentEditable"
+                v-model:value="contentText"
+                type="textarea"
+                :rows="20"
+                :disabled="!isContentEditable"
+                placeholder="暂无文档内容"
+                style="font-family: monospace;"
+              />
+              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+            </template>
           </template>
         </NSpin>
         <template #footer>

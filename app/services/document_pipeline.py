@@ -62,7 +62,7 @@ class DocumentPipeline:
             doc.status = DocumentStatus.FAILED
             doc.error_message = str(e)
             await doc.save()
-            logger.error(f"Document processing failed: id={doc_id}, error={e}")
+            logger.exception(f"Document processing failed: id={doc_id}")
 
     async def _fetch_feishu_content(self, doc: Document) -> str:
         """从飞书拉取文档内容"""
@@ -80,10 +80,11 @@ class DocumentPipeline:
 
         access_token = await feishu_service.get_tenant_access_token(bot_configs.app_id, bot_configs.app_secret)
         content = await feishu_service.fetch_document_content(doc_token, doc_type, access_token)
-        agent_content =  agent_service.run_agent("doc_to_markdown",doc)
-        logger.info(f"Agent Content: {agent_content}")
+        agent_content = await agent_service.run_agent("doc_to_markdown",{"document_content": content})
         doc.source_meta = {**meta, "feishu_doc_token": doc_token, "feishu_doc_type": doc_type}
-        return content
+        if not agent_content["success"]:
+            raise ValueError(f"Agent execution failed: agent_name=doc_to_markdown")
+        return agent_content["markdown_content"]
 
     async def _read_uploaded_file(self, doc: Document) -> str:
         """读取上传的文件内容"""
@@ -166,7 +167,7 @@ class DocumentPipeline:
             doc.status = DocumentStatus.FAILED
             doc.error_message = str(e)
             await doc.save()
-            logger.error(f"Document vectorization failed: id={doc_id}, error={e}")
+            logger.exception(f"Document vectorization failed: id={doc_id}")
 
     async def publish_to_feishu(self, structured_result_id: int):
         """将结构化结果发布到飞书云文档"""
@@ -197,7 +198,7 @@ class DocumentPipeline:
         except Exception as e:
             result.feishu_publish_status = FeishuPublishStatus.FAILED
             await result.save()
-            logger.error(f"Feishu publish failed: result_id={structured_result_id}, error={e}")
+            logger.exception(f"Feishu publish failed: result_id={structured_result_id}")
 
     async def handle_bot_message(self, bot_id: int, feishu_open_id: str, chat_id: str, question: str) -> dict:
         """飞书机器人消息处理"""

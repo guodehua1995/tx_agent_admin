@@ -201,4 +201,4 @@ async def _process_webhook_message(
             msg_type="interactive",
         )
     except Exception as e:
-        logger.error("Webhook background processing failed: bot_id=%s, error=%s", bot_id, e)
+        logger.exception(f"Webhook background processing failed: bot_id={bot_id}")

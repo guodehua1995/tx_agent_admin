@@ -6,6 +6,7 @@
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from app.log import logger
 
 from ..base import BaseAgent
 from ..registry import register_agent
@@ -25,6 +26,7 @@ SYSTEM_PROMPT = """你是一个专业的文档格式化专家。你的任务将�
 - 只输出 Markdown 格式的内容
 - 不要添加额外解释
 - 确保 Markdown 语法正确"""
+
 
 
 @register_agent
@@ -47,17 +49,19 @@ class DocToMarkdownAgent(BaseAgent):
         )
 
     async def execute(self, input_data: dict, **kwargs) -> dict:
+
         document_content = input_data.get("document_content", "")
 
         if not document_content:
             raise ValueError("document_content is required")
+        logger.info(f"Document Content: {document_content}")
 
         # 构建链
         chain = self.prompt | self.llm | StrOutputParser()
 
         # 执行
         markdown_content = await chain.ainvoke({"document_content": document_content})
-
+        logger.info(f"Markdown Content: {markdown_content}")
         return {
             "success": True,
             "markdown_content": markdown_content,
