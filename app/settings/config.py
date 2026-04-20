@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     CORS_ALLOW_CREDENTIALS: bool = True
     CORS_ALLOW_METHODS: typing.List = ["*"]
     CORS_ALLOW_HEADERS: typing.List = ["*"]
+    CORS_EXPOSE_HEADERS: typing.List = ["*"]  # SSE 需要暴露 headers
 
     PROJECT_ROOT: str = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     BASE_DIR: str = os.path.abspath(os.path.join(PROJECT_ROOT, os.pardir))

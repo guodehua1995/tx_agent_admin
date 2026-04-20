@@ -1,14 +1,6 @@
 <script setup>
 import { h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
-import {
-  NButton,
-  NForm,
-  NFormItem,
-  NInput,
-  NPopconfirm,
-  NSwitch,
-  NTag,
-} from 'naive-ui'
+import { NButton, NForm, NFormItem, NInput, NPopconfirm, NSwitch, NTag } from 'naive-ui'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import CrudModal from '@/components/table/CrudModal.vue'
@@ -71,7 +63,11 @@ const columns = [
     width: 100,
     align: 'center',
     render(row) {
-      return h(NTag, { type: row.needs_structuring ? 'success' : 'default', size: 'small' }, { default: () => (row.needs_structuring ? '是' : '否') })
+      return h(
+        NTag,
+        { type: row.needs_structuring ? 'success' : 'default', size: 'small' },
+        { default: () => (row.needs_structuring ? '是' : '否') }
+      )
     },
   },
   {
@@ -80,7 +76,11 @@ const columns = [
     width: 80,
     align: 'center',
     render(row) {
-      return h(NTag, { type: row.is_active ? 'success' : 'default', size: 'small' }, { default: () => (row.is_active ? '启用' : '停用') })
+      return h(
+        NTag,
+        { type: row.is_active ? 'success' : 'default', size: 'small' },
+        { default: () => (row.is_active ? '启用' : '停用') }
+      )
     },
   },
   {
@@ -101,21 +101,35 @@ const columns = [
         withDirectives(
           h(
             NButton,
-            { size: 'small', type: 'primary', style: 'margin-right: 8px;', onClick: () => handleEdit(row) },
-            { default: () => '编辑', icon: renderIcon('material-symbols:edit-outline', { size: 16 }) }
+            {
+              size: 'small',
+              type: 'primary',
+              style: 'margin-right: 8px;',
+              onClick: () => handleEdit(row),
+            },
+            {
+              default: () => '编辑',
+              icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
+            }
           ),
           [[vPermission, 'post/api/v1/document/type/update']]
         ),
         h(
           NPopconfirm,
-          { onPositiveClick: () => handleDelete({ type_id: row.id }, false), onNegativeClick: () => {} },
+          {
+            onPositiveClick: () => handleDelete({ type_id: row.id }, false),
+            onNegativeClick: () => {},
+          },
           {
             trigger: () =>
               withDirectives(
                 h(
                   NButton,
                   { size: 'small', type: 'error' },
-                  { default: () => '删除', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+                  {
+                    default: () => '删除',
+                    icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
+                  }
                 ),
                 [[vPermission, 'delete/api/v1/document/type/delete']]
               ),
@@ -157,10 +171,18 @@ const columns = [
         :model="modalForm"
         :disabled="modalAction === 'view'"
       >
-        <NFormItem label="类型名称" path="name" :rule="{ required: true, message: '请输入类型名称', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="类型名称"
+          path="name"
+          :rule="{ required: true, message: '请输入类型名称', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.name" placeholder="请输入类型名称" />
         </NFormItem>
-        <NFormItem label="编码" path="code" :rule="{ required: true, message: '请输入编码', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="编码"
+          path="code"
+          :rule="{ required: true, message: '请输入编码', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.code" placeholder="请输入编码 (如 feishu_doc)" />
         </NFormItem>
         <NFormItem label="描述" path="description">

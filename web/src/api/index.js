@@ -73,6 +73,13 @@ export default {
   deleteAgent: (params = {}) => request.delete('/agent/delete', { params }),
   updateAgentKnowledgeBases: (data = {}) => request.post('/agent/update_knowledge_bases', data),
   agentChat: (data = {}) => request.post('/agent/chat', data),
+  agentChatStream: (data = {}) =>
+    request.post('/agent/chat/stream', data, {
+      responseType: 'text',
+      headers: {
+        Accept: 'text/event-stream',
+      },
+    }),
   // Review
   getReviewList: (params = {}) => request.get('/review/list', { params }),
   getReview: (params = {}) => request.get('/review/get', { params }),

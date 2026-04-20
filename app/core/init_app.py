@@ -37,6 +37,7 @@ def make_middlewares():
             allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
             allow_methods=settings.CORS_ALLOW_METHODS,
             allow_headers=settings.CORS_ALLOW_HEADERS,
+            expose_headers=settings.CORS_EXPOSE_HEADERS,
         ),
         Middleware(BackGroundTaskMiddleware),
         Middleware(

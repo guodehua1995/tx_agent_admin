@@ -82,6 +82,11 @@ class HttpAuditLogMiddleware(BaseHTTPMiddleware):
         return args
 
     async def get_response_body(self, request: Request, response: Response) -> Any:
+        # 流式响应（SSE 等）跳过记录，避免把 SSE 文本当 JSON 存入审计日志
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            return None
+
         # 检查Content-Length
         content_length = response.headers.get("content-length")
         if content_length and int(content_length) > self.max_body_size:

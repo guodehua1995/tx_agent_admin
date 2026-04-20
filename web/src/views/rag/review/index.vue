@@ -163,7 +163,11 @@ const columns = [
     align: 'center',
     render(row) {
       const labelMap = { feishu_doc: '飞书文档', file_upload: '文件上传', web_url: '网页链接' }
-      return h(NTag, { size: 'small' }, { default: () => labelMap[row.source_type] || row.source_type })
+      return h(
+        NTag,
+        { size: 'small' },
+        { default: () => labelMap[row.source_type] || row.source_type }
+      )
     },
   },
   {
@@ -173,7 +177,11 @@ const columns = [
     align: 'center',
     render(row) {
       const labelMap = { pending_review: '待审核', approved: '已通过', rejected: '已拒绝' }
-      return h(NTag, { type: statusColorMap[row.status] || 'default', size: 'small' }, { default: () => labelMap[row.status] || row.status })
+      return h(
+        NTag,
+        { type: statusColorMap[row.status] || 'default', size: 'small' },
+        { default: () => labelMap[row.status] || row.status }
+      )
     },
   },
   {
@@ -195,8 +203,16 @@ const columns = [
       const buttons = [
         h(
           NButton,
-          { size: 'small', type: 'info', style: 'margin-right: 8px;', onClick: () => openReviewDrawer(row) },
-          { default: () => '查看', icon: renderIcon('material-symbols:visibility-outline', { size: 16 }) }
+          {
+            size: 'small',
+            type: 'info',
+            style: 'margin-right: 8px;',
+            onClick: () => openReviewDrawer(row),
+          },
+          {
+            default: () => '查看',
+            icon: renderIcon('material-symbols:visibility-outline', { size: 16 }),
+          }
         ),
       ]
       if (row.status === 'pending_review') {
@@ -272,10 +288,15 @@ const columns = [
               <NDescriptionsItem label="来源类型">{{ reviewDoc.source_type }}</NDescriptionsItem>
               <NDescriptionsItem label="状态">
                 <NTag :type="statusColorMap[reviewDoc.status] || 'default'" size="small">
-                  {{ statusOptions.find((o) => o.value === reviewDoc.status)?.label || reviewDoc.status }}
+                  {{
+                    statusOptions.find((o) => o.value === reviewDoc.status)?.label ||
+                    reviewDoc.status
+                  }}
                 </NTag>
               </NDescriptionsItem>
-              <NDescriptionsItem label="创建日期">{{ formatDate(reviewDoc.created_at) }}</NDescriptionsItem>
+              <NDescriptionsItem label="创建日期">{{
+                formatDate(reviewDoc.created_at)
+              }}</NDescriptionsItem>
             </NDescriptions>
 
             <NCard title="文档内容" size="small" style="margin-top: 16px">
@@ -285,12 +306,17 @@ const columns = [
                 type="textarea"
                 :rows="12"
                 readonly
-                style="font-family: monospace;"
+                style="font-family: monospace"
               />
               <NEmpty v-else description="暂无文档内容" />
             </NCard>
 
-            <NCard title="审核历史" size="small" style="margin-top: 16px" v-if="reviewHistory.length">
+            <NCard
+              v-if="reviewHistory.length"
+              title="审核历史"
+              size="small"
+              style="margin-top: 16px"
+            >
               <NTimeline>
                 <NTimelineItem
                   v-for="(item, idx) in reviewHistory"
@@ -312,7 +338,7 @@ const columns = [
                 style="margin-bottom: 12px"
               />
               <NSpace>
-               <!-- <NButton
+                <!-- <NButton
                   v-permission="'post/api/v1/review/reject'"
                   type="warning"
                   :loading="reviewLoading"
@@ -320,7 +346,7 @@ const columns = [
                 >
                   编辑
                 </NButton>-->
-              
+
                 <NButton
                   v-permission="'post/api/v1/review/approve'"
                   type="success"
