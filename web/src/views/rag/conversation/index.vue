@@ -1,12 +1,6 @@
 <script setup>
 import { h, onMounted, ref } from 'vue'
-import {
-  NButton,
-  NDrawer,
-  NDrawerContent,
-  NSelect,
-  NTag,
-} from 'naive-ui'
+import { NButton, NDrawer, NDrawerContent, NSelect, NTag } from 'naive-ui'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -128,13 +122,20 @@ const columns = [
     <NDrawer v-model:show="drawerVisible" placement="right" :width="500">
       <NDrawerContent title="消息记录" :native-scrollbar="false">
         <div v-if="messageLoading" style="text-align: center; padding: 20px">加载中...</div>
-        <div v-else-if="messages.length === 0" style="text-align: center; padding: 20px; color: #999">
+        <div
+          v-else-if="messages.length === 0"
+          style="text-align: center; padding: 20px; color: #999"
+        >
           暂无消息
         </div>
         <div v-else>
           <div v-for="(msg, idx) in messages" :key="idx" style="margin-bottom: 16px">
             <div :style="{ textAlign: msg.role === 'user' ? 'right' : 'left' }">
-              <NTag :type="msg.role === 'user' ? 'info' : 'success'" size="small" style="margin-bottom: 4px">
+              <NTag
+                :type="msg.role === 'user' ? 'info' : 'success'"
+                size="small"
+                style="margin-bottom: 4px"
+              >
                 {{ msg.role === 'user' ? '用户' : 'Agent' }}
               </NTag>
               <div style="font-size: 12px; color: #999; margin-bottom: 2px">

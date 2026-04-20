@@ -112,10 +112,19 @@ onMounted(() => {
 <template>
   <CommonPage show-footer title="全局配置">
     <template #action>
-      <NButton v-permission="'post/api/v1/global_config/create'" type="primary" style="margin-right: 12px;" @click="handleAdd">
+      <NButton
+        v-permission="'post/api/v1/global_config/create'"
+        type="primary"
+        style="margin-right: 12px"
+        @click="handleAdd"
+      >
         <TheIcon icon="material-symbols:add" :size="18" class="mr-5" />新增配置
       </NButton>
-      <NButton v-permission="'post/api/v1/global_config/batch_update'" type="info" @click="handleSaveAll">
+      <NButton
+        v-permission="'post/api/v1/global_config/batch_update'"
+        type="info"
+        @click="handleSaveAll"
+      >
         <TheIcon icon="material-symbols:save-outline" :size="18" class="mr-5" />全部保存
       </NButton>
     </template>
@@ -140,13 +149,17 @@ onMounted(() => {
                 <span>{{ item.config_key }}</span>
                 <NTooltip v-if="item.description">
                   <template #trigger>
-                    <TheIcon icon="material-symbols:info-outline" :size="14" style="margin-left: 4px; cursor: help; vertical-align: middle; opacity: 0.6;" />
+                    <TheIcon
+                      icon="material-symbols:info-outline"
+                      :size="14"
+                      style="margin-left: 4px; cursor: help; vertical-align: middle; opacity: 0.6"
+                    />
                   </template>
                   {{ item.description }}
                 </NTooltip>
               </template>
-              <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
-                <NInput v-model:value="item.config_value" style="flex: 1;" />
+              <div style="display: flex; align-items: center; gap: 8px; width: 100%">
+                <NInput v-model:value="item.config_value" style="flex: 1" />
                 <NPopconfirm @positive-click="handleDeleteConfig(item.id)">
                   <template #trigger>
                     <NButton
@@ -180,17 +193,35 @@ onMounted(() => {
         :label-width="80"
         :model="modalForm"
       >
-        <NFormItem label="配置键" path="config_key" :rule="{ required: true, message: '请输入配置键', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="配置键"
+          path="config_key"
+          :rule="{ required: true, message: '请输入配置键', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.config_key" placeholder="如: feishu.doc_bot.app_id" />
         </NFormItem>
         <NFormItem label="配置值" path="config_value">
-          <NInput v-model:value="modalForm.config_value" type="textarea" placeholder="配置值" :rows="2" />
+          <NInput
+            v-model:value="modalForm.config_value"
+            type="textarea"
+            placeholder="配置值"
+            :rows="2"
+          />
         </NFormItem>
-        <NFormItem label="分组" path="config_group" :rule="{ required: true, message: '请输入分组名', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="分组"
+          path="config_group"
+          :rule="{ required: true, message: '请输入分组名', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.config_group" placeholder="如: 飞书集成" />
         </NFormItem>
         <NFormItem label="描述" path="description">
-          <NInput v-model:value="modalForm.description" type="textarea" placeholder="配置项说明 (可选)" :rows="2" />
+          <NInput
+            v-model:value="modalForm.description"
+            type="textarea"
+            placeholder="配置项说明 (可选)"
+            :rows="2"
+          />
         </NFormItem>
       </NForm>
     </CrudModal>

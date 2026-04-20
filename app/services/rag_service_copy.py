@@ -1,8 +1,3 @@
-from __future__ import annotations
-
-import json
-from typing import Any, Optional
-
 from app.log import logger
 from app.models.rag import KnowledgeBase, LLMProviderConfig
 from app.settings import settings
@@ -42,9 +37,8 @@ class RAGService:
             model=config.model_name,
             max_tokens=config.max_tokens,
             temperature=extra.get("temperature", 0.7),
-            is_chat_model=True,  
-            context_window=8192,
-            is_function_calling_model=True,
+            is_chat_model=True,
+            context_window= 8192,
         )
 
     def _build_embed_model(self, config: LLMProviderConfig):
@@ -262,127 +256,6 @@ class RAGService:
             logger.error(f"Chat error: {e}")
             return {"answer": str(e), "sources": []}
 
-    # ------------------------------------------------------------------
-    # 知识库向量查询工具构建器
-    # ------------------------------------------------------------------
-
-    async def kd_vector_tools_builder(
-        self,
-        knowledge_bases: list[KnowledgeBase],
-        chat_model_config: LLMProviderConfig,
-    ) -> list:
-        """
-        为每个知识库构建一个可被 Agent 调用的 FunctionTool。
-
-        入参:
-            knowledge_bases: 关联的知识库列表
-            chat_model_config: 对话模型配置（用于构建 embed_model）
-
-        返回:
-            List[FunctionTool] — 每个 tool 对应一个知识库
-
-        扩展点:
-            可根据 kb.chunk_mode 等字段为不同知识库选择不同的检索策略
-            （如 Q&A 检索、父子切片检索等），当前仅实现基础向量检索。
-        """
-        from llama_index.core import VectorStoreIndex
-        from llama_index.core.tools import FunctionTool
-        from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
-
-        tools = []
-        for kb in knowledge_bases:
-            # 构建该知识库的向量索引和检索器
-            kb_filter = MetadataFilters(
-                filters=[ExactMatchFilter(key="knowledge_base_id", value=str(kb.id))]
-            )
-            index = VectorStoreIndex.from_vector_store(
-                vector_store=self._vector_store,
-                embed_model=self._build_embed_model(
-                    await LLMProviderConfig.get(id=kb.embedding_model_id)
-                ),
-            )
-            query_mode = "hybrid" if kb.retrieval_mode == "hybrid" else "default"
-
-            # --- 扩展点：根据 kb.chunk_mode 切换检索策略 ---
-            # if kb.chunk_mode == "qa":
-            #     retriever = ... (Q&A 检索器)
-            # elif kb.chunk_mode == "parent_child":
-            #     retriever = ... (父子切片检索器)
-            # else:
-            #     retriever = ... (默认向量检索)
-
-            retriever = index.as_retriever(
-                similarity_top_k=kb.similarity_top_k,
-                filters=kb_filter,
-                vector_store_query_mode=query_mode,
-            )
-
-            # 工厂函数：生成闭包，避免下划线参数出现在函数签名中
-            # （FunctionTool 会扫描签名构建 Pydantic schema，不允许下划线字段名）
-            kb_name = kb.name
-            kb_desc = kb.description or kb.name
-            kb_threshold = kb.similarity_threshold
-
-            logger.debug(f"[kd_vector_tools_builder] Building tool for kb={kb_name} desc={kb_desc}")
-
-            def _make_kd_query_tool_fn(captured_retriever, captured_kb_name, captured_threshold):
-                async def kd_vector_query(
-                    query: str,
-                    metadata_filters: Optional[dict] = None,
-                ) -> str:
-                    """在知识库中执行向量检索，返回匹配文档片段的 JSON 字符串"""
-                    logger.debug(f"[kd_vector_query] kb={captured_kb_name} Query: {query}")
-                    try:
-                        from llama_index.core.indices.query.schema import QueryBundle
-                        from app.services.rag_node_processors import TextOnlyPostProcessor
-
-                        nodes = await captured_retriever.aretrieve(query)
-                        # 清理 metadata，减少 token 消耗
-                        processor = TextOnlyPostProcessor()
-                        nodes = processor.postprocess_nodes(
-                            nodes, query_bundle=QueryBundle(query)
-                        )
-                        results = []
-                        for node in nodes:
-                            score = getattr(node, "score", None)
-                            if score and score >= captured_threshold:
-                                node_obj = node.node if hasattr(node, "node") else node
-                                node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
-                                results.append({
-                                    "score": round(score, 4),
-                                    "text": node_text,
-                                })
-                        return json.dumps(results, ensure_ascii=False) if results else "[]"
-                    except Exception as e:
-                        logger.error(f"[kd_vector_query] Error in {captured_kb_name}: {e}")
-                        return json.dumps([{"error": str(e)}], ensure_ascii=False)
-                return kd_vector_query
-
-            kd_query_fn = _make_kd_query_tool_fn(retriever, kb_name, kb_threshold)
-
-            # 工具名：仅使用 ASCII 字符（function calling 协议不支持中文 tool name）
-            # 中文信息放在 description 中供 LLM 理解工具用途
-            tool_name = f"kd_query_{kb.id}"
-            tool_desc = (
-                f"在「{kb_name}」知识库中检索与问题相关的文档内容。"
-                f"{kb_desc}。"
-                f"输入参数 query 为检索关键词/问题，metadata_filters 为可选的元数据过滤条件。"
-            )
-            
-            tool = FunctionTool.from_defaults(
-                fn=kd_query_fn,
-                name=tool_name,
-                description=tool_desc,
-            )
-            tools.append(tool)
-            logger.debug(f"[kd_vector_tools_builder] Built tool: {tool_name} for kb={kb_name} desc={kb_desc}")
-
-        return tools
-
-    # ------------------------------------------------------------------
-    # 流式问答 — 基于 FunctionAgent + 知识库向量工具
-    # ------------------------------------------------------------------
-
     async def chat_stream(
         self,
         question: str,
@@ -391,96 +264,104 @@ class RAGService:
         chat_model_config: LLMProviderConfig,
         system_prompt: str = None,
     ):
-        """多轮对话问答（流式）— 使用 FunctionAgent + 知识库向量工具替代 CondensePlusContextChatEngine"""
-        from llama_index.core.agent.workflow import FunctionAgent, AgentStream
+        """多轮对话问答（流式）- 返回异步生成器"""
+        from llama_index.core import VectorStoreIndex
+        from llama_index.core.chat_engine import CondensePlusContextChatEngine
         from llama_index.core.llms import ChatMessage as LlamaChatMessage
-        from llama_index.core.memory import ChatMemoryBuffer
-
+        from llama_index.core.vector_stores import (
+            ExactMatchFilter,
+            MetadataFilters,
+        )
         try:
+        
             llm = self._build_llm(chat_model_config)
+            kb_ids = [str(kb.id) for kb in knowledge_bases]
+            max_top_k = max(kb.similarity_top_k for kb in knowledge_bases)
+            use_hybrid = any(kb.retrieval_mode == "hybrid" for kb in knowledge_bases)
+            min_threshold = min(kb.similarity_threshold for kb in knowledge_bases)
 
-            # Step 1: 构建知识库向量查询工具
-            kd_tools = await self.kd_vector_tools_builder(
-                knowledge_bases=knowledge_bases,
-                chat_model_config=chat_model_config,
+            # 构建知识库过滤条件
+            if len(kb_ids) == 1:
+                filters = MetadataFilters(filters=[ExactMatchFilter(key="knowledge_base_id", value=kb_ids[0])])
+            else:
+                filters = MetadataFilters(
+                    filters=[ExactMatchFilter(key="knowledge_base_id", value=kb_id) for kb_id in kb_ids],
+                    condition="or"
+                )
+
+            index = VectorStoreIndex.from_vector_store(
+                vector_store=self._vector_store,
+                embed_model=self._build_embed_model(
+                    await LLMProviderConfig.get(id=knowledge_bases[0].embedding_model_id)
+                ),
             )
+
+            # 召回文档
+            query_mode = "hybrid" if use_hybrid else "default"
+            retriever = index.as_retriever(
+                similarity_top_k=max_top_k,
+                filters=filters,
+                vector_store_query_mode=query_mode,
+            )
+            logger.debug(f"Retrieving documents for question: {question}")
             
-            if not kd_tools:
-                yield {"type": "error", "content": "未构建到任何知识库查询工具"}
-                return
-
-            # Step 2: 构建历史对话（最多10条 = 5轮）
-            max_history_messages = 10
-            limited_history = history[-max_history_messages:] if len(history) > max_history_messages else history
-            chat_history = []
-            for msg in limited_history:
-                role = "user" if msg["role"] == "user" else "assistant"
-                chat_history.append(LlamaChatMessage(role=role, content=str(msg["content"])))
-
-            # Step 3: 构建 Agent
-            agent_prompt = (
-                system_prompt
-                or "你是一个智能问答助手。请使用提供的知识库查询工具来检索相关文档，然后基于检索结果回答用户问题。"
-                "如果检索结果不足以回答问题，请如实说明。回答应准确、简洁、有条理。"
-            )
-            context_window = getattr(llm.metadata, "context_window", 4096)
+            # 限制历史对话长度，防止上下文超限
+            max_history_turns = 5
+            limited_history = history[-max_history_turns * 2:] if len(history) > max_history_turns * 2 else history
+            chat_history = [
+                LlamaChatMessage(role=msg["role"], content=msg["content"]) for msg in limited_history
+            ]
+            
+            # 使用自定义内存缓冲区
+            from llama_index.core.memory import ChatMemoryBuffer
+            context_window = getattr(llm.metadata, 'context_window', 4096)
             memory = ChatMemoryBuffer.from_defaults(
                 token_limit=int(context_window * 0.9),
-                chat_history=chat_history,
+                chat_history=chat_history
             )
+            
+            # 使用 node_postprocessor 清理 metadata
+            from app.services.rag_node_processors import TextOnlyPostProcessor
+            from llama_index.core.chat_engine.types import StreamingAgentChatResponse
+            from llama_index.core.postprocessor import SimilarityPostprocessor
 
-            agent = FunctionAgent(
-                tools=kd_tools,
+            chat_engine = CondensePlusContextChatEngine.from_defaults(
+                retriever=retriever,
                 llm=llm,
-                system_prompt=agent_prompt,
+                system_prompt=system_prompt,
                 memory=memory,
-                verbose=True,
+                node_postprocessors=[TextOnlyPostProcessor(),SimilarityPostprocessor(similarity_cutoff=0.7)],
             )
+            
+            # 流式生成响应（不再预先 aretrieve，避免重复检索和阻塞）
+            full_response = ""
+            streaming_response: StreamingAgentChatResponse = await chat_engine.astream_chat(question)
+            async for chunk in streaming_response.async_response_gen():
+                yield {"type": "delta", "content": chunk}
+                logger.debug(f"[Agent] Chat stream chunk: {chunk}")
+                delta = chunk
+                full_response += delta
+             # 从 streaming_response 中提取 sources
+            sources = []
+            source_nodes = getattr(streaming_response, 'source_nodes', []) or []
+            for node in source_nodes:
+                score = getattr(node, 'score', None)
+                if score and score >= min_threshold:
+                    node_text = node.node.text[:200] if hasattr(node.node, 'text') else str(node.node)[:200]
 
-            # Step 4: 运行 Agent（流式），从 AgentStream 事件中提取 delta
-            handler = agent.run(
-                user_msg=question,
-                chat_history=chat_history,
-            )
-
-            sources_data = []
-            async for event in handler.stream_events():
-                if isinstance(event, AgentStream):
-                    delta = event.delta or ""
-                    if delta:
-                        yield {"type": "delta", "content": delta}
-
-            # 获取最终结果
-            response = await handler
-            # 从 Agent 的工具调用结果中提取 sources
-            # FunctionAgent 的 response 是 AgentOutput
-            final_text = str(response)
-
-            # 尝试从 chat_history memory 中获取工具调用结果作为 sources
-            try:
-                all_messages = memory.get_all()
-                for msg in all_messages:
-                    # 工具返回的消息包含检索的 JSON
-                    if msg.role == "tool" and msg.content:
-                        try:
-                            chunks = json.loads(msg.content)
-                            if isinstance(chunks, list):
-                                for chunk in chunks:
-                                    if isinstance(chunk, dict) and "score" in chunk:
-                                        sources_data.append({
-                                            "score": chunk["score"],
-                                            "text_preview": chunk.get("text", "")[:200],
-                                        })
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-            except Exception as e:
-                logger.warning(f"[Agent] Failed to extract sources from memory: {e}")
-
+                    sources.append(
+                        {
+                            "score": score,
+                            "text_preview": node_text,
+                            "metadata": node.metadata,
+                        }
+                    )
+            
             # 最后发送 sources
-            yield {"type": "sources", "content": sources_data}
-
-        except BaseException as e:
-            logger.error(f"Chat stream error: {type(e).__name__}: {e}")
+            yield {"type": "sources", "content": sources}
+            
+        except Exception as e:
+            logger.error(f"Chat stream error: {e}")
             yield {"type": "error", "content": str(e)}
 
     async def test_model_connection(self, config: LLMProviderConfig) -> bool:

@@ -106,7 +106,9 @@ const columns = [
     width: 100,
     align: 'center',
     render(row) {
-      const label = retrievalModeOptions.find((o) => o.value === row.retrieval_mode)?.label || row.retrieval_mode
+      const label =
+        retrievalModeOptions.find((o) => o.value === row.retrieval_mode)?.label ||
+        row.retrieval_mode
       return h(NTag, { size: 'small' }, { default: () => label })
     },
   },
@@ -116,7 +118,8 @@ const columns = [
     width: 100,
     align: 'center',
     render(row) {
-      const label = chunkModeOptions.find((o) => o.value === row.chunk_mode)?.label || row.chunk_mode
+      const label =
+        chunkModeOptions.find((o) => o.value === row.chunk_mode)?.label || row.chunk_mode
       return h(NTag, { size: 'small' }, { default: () => label })
     },
   },
@@ -132,7 +135,11 @@ const columns = [
     width: 80,
     align: 'center',
     render(row) {
-      return h(NTag, { type: row.is_active ? 'success' : 'default', size: 'small' }, { default: () => (row.is_active ? '启用' : '停用') })
+      return h(
+        NTag,
+        { type: row.is_active ? 'success' : 'default', size: 'small' },
+        { default: () => (row.is_active ? '启用' : '停用') }
+      )
     },
   },
   {
@@ -155,21 +162,35 @@ const columns = [
         withDirectives(
           h(
             NButton,
-            { size: 'small', type: 'primary', style: 'margin-right: 8px;', onClick: () => handleEdit(row) },
-            { default: () => '编辑', icon: renderIcon('material-symbols:edit-outline', { size: 16 }) }
+            {
+              size: 'small',
+              type: 'primary',
+              style: 'margin-right: 8px;',
+              onClick: () => handleEdit(row),
+            },
+            {
+              default: () => '编辑',
+              icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
+            }
           ),
           [[vPermission, 'post/api/v1/knowledge_base/update']]
         ),
         h(
           NPopconfirm,
-          { onPositiveClick: () => handleDelete({ kb_id: row.id }, false), onNegativeClick: () => {} },
+          {
+            onPositiveClick: () => handleDelete({ kb_id: row.id }, false),
+            onNegativeClick: () => {},
+          },
           {
             trigger: () =>
               withDirectives(
                 h(
                   NButton,
                   { size: 'small', type: 'error' },
-                  { default: () => '删除', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+                  {
+                    default: () => '删除',
+                    icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
+                  }
                 ),
                 [[vPermission, 'delete/api/v1/knowledge_base/delete']]
               ),
@@ -223,14 +244,31 @@ const columns = [
         :model="modalForm"
         :disabled="modalAction === 'view'"
       >
-        <NFormItem label="名称" path="name" :rule="{ required: true, message: '请输入名称', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="名称"
+          path="name"
+          :rule="{ required: true, message: '请输入名称', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.name" placeholder="请输入知识库名称" />
         </NFormItem>
         <NFormItem label="描述" path="description">
           <NInput v-model:value="modalForm.description" type="textarea" placeholder="请输入描述" />
         </NFormItem>
-        <NFormItem label="Embedding模型" path="embedding_model_id" :rule="{ required: true, type: 'number', message: '请选择Embedding模型', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.embedding_model_id" :options="embeddingModelOptions" placeholder="请选择Embedding模型" />
+        <NFormItem
+          label="Embedding模型"
+          path="embedding_model_id"
+          :rule="{
+            required: true,
+            type: 'number',
+            message: '请选择Embedding模型',
+            trigger: ['change', 'blur'],
+          }"
+        >
+          <NSelect
+            v-model:value="modalForm.embedding_model_id"
+            :options="embeddingModelOptions"
+            placeholder="请选择Embedding模型"
+          />
         </NFormItem>
         <NFormItem label="召回模式" path="retrieval_mode">
           <NSelect v-model:value="modalForm.retrieval_mode" :options="retrievalModeOptions" />
@@ -239,16 +277,37 @@ const columns = [
           <NSelect v-model:value="modalForm.chunk_mode" :options="chunkModeOptions" />
         </NFormItem>
         <NFormItem label="分块大小" path="chunk_size">
-          <NInputNumber v-model:value="modalForm.chunk_size" :min="64" :max="4096" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.chunk_size"
+            :min="64"
+            :max="4096"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="分块重叠" path="chunk_overlap">
-          <NInputNumber v-model:value="modalForm.chunk_overlap" :min="0" :max="512" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.chunk_overlap"
+            :min="0"
+            :max="512"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="Top-K" path="similarity_top_k">
-          <NInputNumber v-model:value="modalForm.similarity_top_k" :min="1" :max="50" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.similarity_top_k"
+            :min="1"
+            :max="50"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="相似度阈值" path="similarity_threshold">
-          <NInputNumber v-model:value="modalForm.similarity_threshold" :min="0" :max="1" :step="0.1" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.similarity_threshold"
+            :min="0"
+            :max="1"
+            :step="0.1"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />

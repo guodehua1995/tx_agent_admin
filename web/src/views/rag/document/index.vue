@@ -52,13 +52,13 @@ let vditorInstance = null
 const isFeishuDoc = computed(() => contentDoc.value?.source_type === 'feishu_doc')
 
 // 飞书文档可编辑，或状态为 rejected 时可编辑
-const isContentEditable = computed(() => isFeishuDoc.value || contentDoc.value?.status === 'rejected')
+const isContentEditable = computed(
+  () => isFeishuDoc.value || contentDoc.value?.status === 'rejected'
+)
 
 function buildSourceMeta(form) {
-  if (form.source_type === 'feishu_doc')
-    return { feishu_url: form.feishu_url || '' }
-  if (form.source_type === 'web_url')
-    return { url: form.web_url || '' }
+  if (form.source_type === 'feishu_doc') return { feishu_url: form.feishu_url || '' }
+  if (form.source_type === 'web_url') return { url: form.web_url || '' }
   return {}
 }
 
@@ -136,7 +136,7 @@ async function openContentDrawer(row) {
         if (previewContainer.value) {
           Vditor.preview(previewContainer.value, contentText.value, {
             mode: 'light',
-            theme: { current: 'light' }
+            theme: { current: 'light' },
           })
         }
       })
@@ -157,25 +157,45 @@ function initVditor() {
     value: contentText.value,
     placeholder: '请输入 Markdown 内容...',
     toolbar: [
-      'headings', 'bold', 'italic', 'strike', '|',
-      'line', 'quote', 'list', 'ordered-list', 'check', '|',
-      'code', 'inline-code', 'insert-before', 'insert-after', '|',
-      'upload', 'link', 'table', '|',
-      'undo', 'redo', '|',
-      'fullscreen', 'preview', 'help'
+      'headings',
+      'bold',
+      'italic',
+      'strike',
+      '|',
+      'line',
+      'quote',
+      'list',
+      'ordered-list',
+      'check',
+      '|',
+      'code',
+      'inline-code',
+      'insert-before',
+      'insert-after',
+      '|',
+      'upload',
+      'link',
+      'table',
+      '|',
+      'undo',
+      'redo',
+      '|',
+      'fullscreen',
+      'preview',
+      'help',
     ],
     toolbarConfig: {
-      pin: true
+      pin: true,
     },
     cache: {
-      enable: false
+      enable: false,
     },
     after: () => {
       // 编辑器初始化完成
     },
     input: (value) => {
       contentText.value = value
-    }
+    },
   })
 }
 
@@ -290,7 +310,8 @@ const columns = [
     width: 100,
     align: 'center',
     render(row) {
-      const label = sourceTypeOptions.find((o) => o.value === row.source_type)?.label || row.source_type
+      const label =
+        sourceTypeOptions.find((o) => o.value === row.source_type)?.label || row.source_type
       return h(NTag, { size: 'small' }, { default: () => label })
     },
   },
@@ -319,7 +340,11 @@ const columns = [
     align: 'center',
     render(row) {
       const label = statusOptions.find((o) => o.value === row.status)?.label || row.status
-      return h(NTag, { type: statusColorMap[row.status] || 'default', size: 'small' }, { default: () => label })
+      return h(
+        NTag,
+        { type: statusColorMap[row.status] || 'default', size: 'small' },
+        { default: () => label }
+      )
     },
   },
   {
@@ -341,27 +366,49 @@ const columns = [
       const buttons = [
         h(
           NButton,
-          { size: 'small', type: 'info', style: 'margin-right: 8px;', onClick: () => openContentDrawer(row) },
-          { default: () => '查看', icon: renderIcon('material-symbols:visibility-outline', { size: 16 }) }
+          {
+            size: 'small',
+            type: 'info',
+            style: 'margin-right: 8px;',
+            onClick: () => openContentDrawer(row),
+          },
+          {
+            default: () => '查看',
+            icon: renderIcon('material-symbols:visibility-outline', { size: 16 }),
+          }
         ),
         withDirectives(
           h(
             NButton,
-            { size: 'small', type: 'primary', style: 'margin-right: 8px;', onClick: () => handleEdit(row) },
-            { default: () => '编辑', icon: renderIcon('material-symbols:edit-outline', { size: 16 }) }
+            {
+              size: 'small',
+              type: 'primary',
+              style: 'margin-right: 8px;',
+              onClick: () => handleEdit(row),
+            },
+            {
+              default: () => '编辑',
+              icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
+            }
           ),
           [[vPermission, 'post/api/v1/document/update']]
         ),
         h(
           NPopconfirm,
-          { onPositiveClick: () => handleDelete({ document_id: row.id }, false), onNegativeClick: () => {} },
+          {
+            onPositiveClick: () => handleDelete({ document_id: row.id }, false),
+            onNegativeClick: () => {},
+          },
           {
             trigger: () =>
               withDirectives(
                 h(
                   NButton,
                   { size: 'small', type: 'error', style: 'margin-right: 8px;' },
-                  { default: () => '删除', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+                  {
+                    default: () => '删除',
+                    icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
+                  }
                 ),
                 [[vPermission, 'delete/api/v1/document/delete']]
               ),
@@ -444,26 +491,78 @@ const columns = [
         :model="modalForm"
         :disabled="modalAction === 'view'"
       >
-        <NFormItem label="标题" path="title" :rule="{ required: true, message: '请输入标题', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="标题"
+          path="title"
+          :rule="{ required: true, message: '请输入标题', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.title" placeholder="请输入文档标题" />
         </NFormItem>
-        <NFormItem label="来源类型" path="source_type" :rule="{ required: true, message: '请选择来源类型', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.source_type" :options="sourceTypeOptions" placeholder="请选择来源类型" :disabled="modalAction === 'edit'" />
+        <NFormItem
+          label="来源类型"
+          path="source_type"
+          :rule="{ required: true, message: '请选择来源类型', trigger: ['change', 'blur'] }"
+        >
+          <NSelect
+            v-model:value="modalForm.source_type"
+            :options="sourceTypeOptions"
+            placeholder="请选择来源类型"
+            :disabled="modalAction === 'edit'"
+          />
         </NFormItem>
-        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'feishu_doc'" label="飞书文档链接" path="feishu_url" :rule="{ required: true, message: '请输入飞书文档链接', trigger: ['input', 'blur'] }">
+        <NFormItem
+          v-if="modalAction === 'add' && modalForm.source_type === 'feishu_doc'"
+          label="飞书文档链接"
+          path="feishu_url"
+          :rule="{ required: true, message: '请输入飞书文档链接', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.feishu_url" placeholder="请输入飞书云文档URL" />
         </NFormItem>
-        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'web_url'" label="网页地址" path="web_url" :rule="{ required: true, message: '请输入网页地址', trigger: ['input', 'blur'] }">
+        <NFormItem
+          v-if="modalAction === 'add' && modalForm.source_type === 'web_url'"
+          label="网页地址"
+          path="web_url"
+          :rule="{ required: true, message: '请输入网页地址', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.web_url" placeholder="请输入网页URL" />
         </NFormItem>
-        <NFormItem v-if="modalAction === 'add' && modalForm.source_type === 'file_upload'" label="上传文件">
+        <NFormItem
+          v-if="modalAction === 'add' && modalForm.source_type === 'file_upload'"
+          label="上传文件"
+        >
           <NButton @click="handleUploadClick">选择文件</NButton>
         </NFormItem>
-        <NFormItem label="文档类型" path="doc_type_id" :rule="{ required: true, type: 'number', message: '请选择文档类型', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.doc_type_id" :options="docTypeOptions" placeholder="请选择文档类型" />
+        <NFormItem
+          label="文档类型"
+          path="doc_type_id"
+          :rule="{
+            required: true,
+            type: 'number',
+            message: '请选择文档类型',
+            trigger: ['change', 'blur'],
+          }"
+        >
+          <NSelect
+            v-model:value="modalForm.doc_type_id"
+            :options="docTypeOptions"
+            placeholder="请选择文档类型"
+          />
         </NFormItem>
-        <NFormItem label="知识库" path="knowledge_base_id" :rule="{ required: true, type: 'number', message: '请选择知识库', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.knowledge_base_id" :options="kbOptions" placeholder="请选择知识库" />
+        <NFormItem
+          label="知识库"
+          path="knowledge_base_id"
+          :rule="{
+            required: true,
+            type: 'number',
+            message: '请选择知识库',
+            trigger: ['change', 'blur'],
+          }"
+        >
+          <NSelect
+            v-model:value="modalForm.knowledge_base_id"
+            :options="kbOptions"
+            placeholder="请选择知识库"
+          />
         </NFormItem>
       </NForm>
     </CrudModal>
@@ -473,30 +572,27 @@ const columns = [
       <NDrawerContent :title="contentDoc ? `文档内容 - ${contentDoc.title}` : '文档内容'">
         <NSpin :show="contentLoading">
           <template v-if="contentDoc">
-            <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+            <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px">
               <NTag :type="statusColorMap[contentDoc.status] || 'default'" size="small">
-                {{ statusOptions.find((o) => o.value === contentDoc.status)?.label || contentDoc.status }}
+                {{
+                  statusOptions.find((o) => o.value === contentDoc.status)?.label ||
+                  contentDoc.status
+                }}
               </NTag>
               <NTag v-if="isFeishuDoc" type="info" size="small">飞书文档</NTag>
-              <span v-if="isContentEditable" style="color: #f0a020; font-size: 13px;">可编辑 - 保存后将重新提交审核</span>
-              <span v-else style="color: #999; font-size: 13px;">只读</span>
+              <span v-if="isContentEditable" style="color: #f0a020; font-size: 13px"
+                >可编辑 - 保存后将重新提交审核</span
+              >
+              <span v-else style="color: #999; font-size: 13px">只读</span>
             </div>
 
             <!-- 飞书文档使用 Vditor 编辑器 -->
             <template v-if="isFeishuDoc">
               <!-- 编辑模式：所见即所得 -->
-              <div
-                v-if="isContentEditable"
-                ref="vditorContainer"
-                style="min-height: 500px;"
-              />
+              <div v-if="isContentEditable" ref="vditorContainer" style="min-height: 500px" />
               <!-- 预览模式 -->
-              <div
-                v-else-if="contentDoc.content"
-                ref="previewContainer"
-                class="vditor-preview"
-              />
-              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+              <div v-else-if="contentDoc.content" ref="previewContainer" class="vditor-preview" />
+              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px" />
             </template>
 
             <!-- 非飞书文档使用普通文本框 -->
@@ -508,9 +604,9 @@ const columns = [
                 :rows="20"
                 :disabled="!isContentEditable"
                 placeholder="暂无文档内容"
-                style="font-family: monospace;"
+                style="font-family: monospace"
               />
-              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px;" />
+              <NEmpty v-else description="暂无文档内容" style="margin-top: 40px" />
             </template>
           </template>
         </NSpin>

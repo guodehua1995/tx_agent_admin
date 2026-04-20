@@ -84,7 +84,8 @@ const columns = [
     width: 120,
     align: 'center',
     render(row) {
-      const label = providerTypeOptions.find((o) => o.value === row.provider_type)?.label || row.provider_type
+      const label =
+        providerTypeOptions.find((o) => o.value === row.provider_type)?.label || row.provider_type
       return h(NTag, { type: 'info', size: 'small' }, { default: () => label })
     },
   },
@@ -101,7 +102,11 @@ const columns = [
     width: 80,
     align: 'center',
     render(row) {
-      return h(NTag, { type: row.is_embedding ? 'success' : 'default', size: 'small' }, { default: () => (row.is_embedding ? '是' : '否') })
+      return h(
+        NTag,
+        { type: row.is_embedding ? 'success' : 'default', size: 'small' },
+        { default: () => (row.is_embedding ? '是' : '否') }
+      )
     },
   },
   {
@@ -110,7 +115,11 @@ const columns = [
     width: 80,
     align: 'center',
     render(row) {
-      return h(NTag, { type: row.is_active ? 'success' : 'default', size: 'small' }, { default: () => (row.is_active ? '启用' : '停用') })
+      return h(
+        NTag,
+        { type: row.is_active ? 'success' : 'default', size: 'small' },
+        { default: () => (row.is_active ? '启用' : '停用') }
+      )
     },
   },
   {
@@ -133,21 +142,35 @@ const columns = [
         withDirectives(
           h(
             NButton,
-            { size: 'small', type: 'primary', style: 'margin-right: 8px;', onClick: () => handleEdit(row) },
-            { default: () => '编辑', icon: renderIcon('material-symbols:edit-outline', { size: 16 }) }
+            {
+              size: 'small',
+              type: 'primary',
+              style: 'margin-right: 8px;',
+              onClick: () => handleEdit(row),
+            },
+            {
+              default: () => '编辑',
+              icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
+            }
           ),
           [[vPermission, 'post/api/v1/ai_config/update']]
         ),
         h(
           NPopconfirm,
-          { onPositiveClick: () => handleDelete({ config_id: row.id }, false), onNegativeClick: () => {} },
+          {
+            onPositiveClick: () => handleDelete({ config_id: row.id }, false),
+            onNegativeClick: () => {},
+          },
           {
             trigger: () =>
               withDirectives(
                 h(
                   NButton,
                   { size: 'small', type: 'error', style: 'margin-right: 8px;' },
-                  { default: () => '删除', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+                  {
+                    default: () => '删除',
+                    icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
+                  }
                 ),
                 [[vPermission, 'delete/api/v1/ai_config/delete']]
               ),
@@ -209,29 +232,72 @@ const columns = [
         :model="modalForm"
         :disabled="modalAction === 'view'"
       >
-        <NFormItem label="名称" path="name" :rule="{ required: true, message: '请输入名称', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="名称"
+          path="name"
+          :rule="{ required: true, message: '请输入名称', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.name" placeholder="请输入名称" />
         </NFormItem>
-        <NFormItem label="提供商类型" path="provider_type" :rule="{ required: true, message: '请选择提供商', trigger: ['change', 'blur'] }">
-          <NSelect v-model:value="modalForm.provider_type" :options="providerTypeOptions" placeholder="请选择提供商" />
+        <NFormItem
+          label="提供商类型"
+          path="provider_type"
+          :rule="{ required: true, message: '请选择提供商', trigger: ['change', 'blur'] }"
+        >
+          <NSelect
+            v-model:value="modalForm.provider_type"
+            :options="providerTypeOptions"
+            placeholder="请选择提供商"
+          />
         </NFormItem>
-        <NFormItem label="API地址" path="api_base_url" :rule="{ required: true, message: '请输入API地址', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="API地址"
+          path="api_base_url"
+          :rule="{ required: true, message: '请输入API地址', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.api_base_url" placeholder="请输入API地址" />
         </NFormItem>
-        <NFormItem label="API密钥" path="api_key" :rule="modalAction === 'add' ? { required: true, message: '请输入API密钥', trigger: ['input', 'blur'] } : undefined">
-          <NInput v-model:value="modalForm.api_key" type="password" show-password-on="click" :placeholder="modalAction === 'edit' ? '不修改请保持原值' : '请输入API密钥'" />
+        <NFormItem
+          label="API密钥"
+          path="api_key"
+          :rule="
+            modalAction === 'add'
+              ? { required: true, message: '请输入API密钥', trigger: ['input', 'blur'] }
+              : undefined
+          "
+        >
+          <NInput
+            v-model:value="modalForm.api_key"
+            type="password"
+            show-password-on="click"
+            :placeholder="modalAction === 'edit' ? '不修改请保持原值' : '请输入API密钥'"
+          />
         </NFormItem>
-        <NFormItem label="模型标识" path="model_name" :rule="{ required: true, message: '请输入模型标识', trigger: ['input', 'blur'] }">
+        <NFormItem
+          label="模型标识"
+          path="model_name"
+          :rule="{ required: true, message: '请输入模型标识', trigger: ['input', 'blur'] }"
+        >
           <NInput v-model:value="modalForm.model_name" placeholder="请输入模型标识" />
         </NFormItem>
         <NFormItem label="Embedding模型" path="is_embedding">
           <NSwitch v-model:value="modalForm.is_embedding" />
         </NFormItem>
         <NFormItem v-if="modalForm.is_embedding" label="向量维度" path="embedding_dimension">
-          <NInputNumber v-model:value="modalForm.embedding_dimension" :min="1" placeholder="请输入向量维度" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.embedding_dimension"
+            :min="1"
+            placeholder="请输入向量维度"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="最大Token" path="max_tokens">
-          <NInputNumber v-model:value="modalForm.max_tokens" :min="1" placeholder="最大Token数" style="width: 100%" />
+          <NInputNumber
+            v-model:value="modalForm.max_tokens"
+            :min="1"
+            placeholder="最大Token数"
+            style="width: 100%"
+          />
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />
