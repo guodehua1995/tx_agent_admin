@@ -13,10 +13,11 @@ class FeishuService:
 
     def __init__(self):
         self._base_url = settings.FEISHU_BASE_URL
+        self._verify_ssl = settings.FEISHU_VERIFY_SSL
 
     async def get_tenant_access_token(self, app_id: str, app_secret: str) -> str:
         """获取 tenant_access_token"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
             resp = await client.post(
                 f"{self._base_url}/auth/v3/tenant_access_token/internal",
                 json={"app_id": app_id, "app_secret": app_secret},
@@ -28,7 +29,7 @@ class FeishuService:
 
     async def fetch_document_content(self, doc_token: str, doc_type: str, access_token: str) -> str:
         """拉取飞书云文档内容"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
             # resp = await client.get(
             #     f"{self._base_url}/docx/v1/documents/{doc_token}/blocks",
             #     headers={"Authorization": f"Bearer {access_token}"},
@@ -52,7 +53,7 @@ class FeishuService:
     ) -> None:
         """发送飞书消息"""
         token = await self.get_tenant_access_token(app_id, app_secret)
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
             await client.post(
                 f"{self._base_url}/im/v1/messages",
                 headers={"Authorization": f"Bearer {token}"},
@@ -81,7 +82,7 @@ class FeishuService:
 
     async def create_doc_in_folder(self, folder_token: str, title: str, content: str, access_token: str) -> str:
         """将结构化结果发布到飞书云文档指定文件夹"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
             resp = await client.post(
                 f"{self._base_url}/docx/v1/documents",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -127,7 +128,7 @@ class FeishuService:
 
     async def get_user_info(self, open_id: str, access_token: str) -> dict:
         """获取飞书用户信息"""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
             resp = await client.get(
                 f"{self._base_url}/contact/v3/users/{open_id}",
                 headers={"Authorization": f"Bearer {access_token}"},
