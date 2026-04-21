@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     # 飞书
     FEISHU_BASE_URL: str = "https://open.feishu.cn/open-apis"
     FEISHU_STRUCTURED_FOLDER_TOKEN: str = ""
+    FEISHU_VERIFY_SSL: bool = True
 
     # LlamaIndex / RAG
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"

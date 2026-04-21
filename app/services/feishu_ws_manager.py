@@ -5,6 +5,8 @@
 """
 
 import asyncio
+import os
+import ssl
 import threading
 from typing import Dict, Optional
 
@@ -17,6 +19,24 @@ from app.log import logger
 from app.models.rag import FeishuBotConfig
 from app.services.document_pipeline import document_pipeline
 from app.services.feishu_service import FeishuService
+from app.settings import settings
+
+# 开发环境跳过飞书 SSL 证书验证（Mac 本地证书链问题）
+if not settings.FEISHU_VERIFY_SSL:
+    os.environ["CURL_CA_BUNDLE"] = ""
+    os.environ["REQUESTS_CA_BUNDLE"] = ""
+
+    import websockets
+
+    _original_connect_cls = websockets.connect
+
+    class _InsecureConnect(_original_connect_cls):
+        def __init__(self, *args, **kwargs):
+            if "ssl" not in kwargs:
+                kwargs["ssl"] = ssl._create_unverified_context()
+            super().__init__(*args, **kwargs)
+
+    websockets.connect = _InsecureConnect
 
 
 class FeishuBotClientManager:
@@ -72,7 +92,6 @@ class FeishuBotClientManager:
                     return
 
                 # 提取消息内容（JSON 字符串需要解析）
-                import json
                 content = json.loads(message.content)
                 text = content.get("text", "").strip()
                 if not text:
