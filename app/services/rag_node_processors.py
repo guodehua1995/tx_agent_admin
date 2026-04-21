@@ -51,6 +51,7 @@ class MetadataFilterPostProcessor:
     ) -> List[NodeWithScore]:
         for node_with_score in nodes:
             if self.keep_keys:
+                
                 # 只保留指定的 keys
                 node_with_score.node.metadata = {
                     k: v for k, v in node_with_score.node.metadata.items()
