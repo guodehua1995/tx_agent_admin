@@ -1,4 +1,5 @@
 import logging
+from termios import TIOCPKT_FLUSHREAD
 
 import httpx
 
@@ -63,19 +64,19 @@ class FeishuService:
 
     async def build_answer_card(self, answer: str, sources: list) -> dict:
         """构建消息卡片"""
-        source_elements = []
+        source_elements = ""
         for i, src in enumerate(sources[:3], 1):
             title = src.get("metadata", {}).get("title", "未知来源")
-            score = src.get("score", 0)
-            source_elements.append({"tag": "div", "text": {"tag": "plain_text", "content": f"{i}. {title} (相关度: {score:.2f})"}})
+            url = src.get("metadata", {}).get("url")
+            source_elements+=f"[{title}]({url})\n"
 
         card = {
             "config": {"wide_screen_mode": True},
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": answer}},
                 {"tag": "hr"},
-                {"tag": "div", "text": {"tag": "plain_text", "content": "参考来源:"}},
-                *source_elements,
+                {"tag": "div", "text": {"tag": "lark_md", "content": "参考来源:\n"+source_elements}},
+                
             ],
         }
         return card

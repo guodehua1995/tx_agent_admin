@@ -4,7 +4,7 @@ import json
 from typing import Any, Optional
 
 from app.log import logger
-from app.models.rag import KnowledgeBase, LLMProviderConfig
+from app.models.rag import Document, KnowledgeBase, LLMProviderConfig
 from app.settings import settings
 
 
@@ -178,86 +178,26 @@ class RAGService:
         chat_model_config: LLMProviderConfig,
         system_prompt: str = None,
     ) -> dict:
-        """多轮对话问答（非流式）"""
-        from llama_index.core import VectorStoreIndex
-        from llama_index.core.chat_engine import CondensePlusContextChatEngine
-        from llama_index.core.llms import ChatMessage as LlamaChatMessage
-        from llama_index.core.vector_stores import (
-            ExactMatchFilter,
-            MetadataFilters,
-        )
+        """多轮对话问答（非流式）— 复用 chat_stream 的 FunctionAgent 架构"""
         try:
-            llm = self._build_llm(chat_model_config)
-            kb_ids = [str(kb.id) for kb in knowledge_bases]
-            max_top_k = max(kb.similarity_top_k for kb in knowledge_bases)
-            use_hybrid = any(kb.retrieval_mode == "hybrid" for kb in knowledge_bases)
-            min_threshold = min(kb.similarity_threshold for kb in knowledge_bases)
-
-            # 构建知识库过滤条件
-            if len(kb_ids) == 1:
-                filters = MetadataFilters(filters=[ExactMatchFilter(key="knowledge_base_id", value=kb_ids[0])])
-            else:
-                filters = MetadataFilters(
-                    filters=[ExactMatchFilter(key="knowledge_base_id", value=kb_id) for kb_id in kb_ids],
-                    condition="or"
-                )
-
-            index = VectorStoreIndex.from_vector_store(
-                vector_store=self._vector_store,
-                embed_model=self._build_embed_model(
-                    await LLMProviderConfig.get(id=knowledge_bases[0].embedding_model_id)
-                ),
-            )
-
-            # 召回文档
-            query_mode = "hybrid" if use_hybrid else "default"
-            retriever = index.as_retriever(
-                similarity_top_k=max_top_k,
-                filters=filters,
-                vector_store_query_mode=query_mode,
-            )
-            logger.debug(f"Retrieving documents for question: {question}")
-            
-            # 限制历史对话长度，防止上下文超限
-            max_history_turns = 5
-            limited_history = history[-max_history_turns * 2:] if len(history) > max_history_turns * 2 else history
-            chat_history = [
-                LlamaChatMessage(role=msg["role"], content=msg["content"]) for msg in limited_history
-            ]
-            
-            # 使用自定义内存缓冲区，设置更大的token限制
-            from llama_index.core.memory import ChatMemoryBuffer
-            # 根据模型配置设置token限制，默认使用模型上下文窗口的90%
-            context_window = getattr(llm.metadata, 'context_window', 4096)
-            memory = ChatMemoryBuffer.from_defaults(
-                token_limit=int(context_window * 0.9),
-                chat_history=chat_history
-            )
-            
-            # 使用 node_postprocessor 清理 metadata，只保留纯文本内容
-            from app.services.rag_node_processors import TextOnlyPostProcessor
-            
-            response = retriever.retrieve(question)
-            chat_engine = CondensePlusContextChatEngine.from_defaults(
-                retriever=retriever,
-                llm=llm,
-                system_prompt=system_prompt,
-                memory=memory,
-                node_postprocessors=[TextOnlyPostProcessor()],
-            )
-            response = await chat_engine.achat(question)
-
+            answer_parts = []
             sources = []
-            for node in response.source_nodes:
-                if node.score and node.score >= min_threshold:
-                    sources.append(
-                        {
-                            "score": node.score,
-                            "text_preview": node.text[:200],
-                            "metadata": node.metadata,
-                        }
-                    )
-            return {"answer": str(response), "sources": sources}
+
+            async for event in self.chat_stream(
+                question=question,
+                history=history,
+                knowledge_bases=knowledge_bases,
+                chat_model_config=chat_model_config,
+                system_prompt=system_prompt,
+            ):
+                if event["type"] == "delta":
+                    answer_parts.append(event["content"])
+                elif event["type"] == "sources":
+                    sources = event["content"]
+                elif event["type"] == "error":
+                    return {"answer": event["content"], "sources": []}
+
+            return {"answer": "".join(answer_parts), "sources": sources}
         except Exception as e:
             logger.error(f"Chat error: {e}")
             return {"answer": str(e), "sources": []}
@@ -334,11 +274,11 @@ class RAGService:
                     logger.debug(f"[kd_vector_query] kb={captured_kb_name} Query: {query}")
                     try:
                         from llama_index.core.indices.query.schema import QueryBundle
-                        from app.services.rag_node_processors import TextOnlyPostProcessor
+                        from app.services.rag_node_processors import MetadataFilterPostProcessor
 
                         nodes = await captured_retriever.aretrieve(query)
                         # 清理 metadata，减少 token 消耗
-                        processor = TextOnlyPostProcessor()
+                        processor = MetadataFilterPostProcessor(["doc_id"])
                         nodes = processor.postprocess_nodes(
                             nodes, query_bundle=QueryBundle(query)
                         )
@@ -348,9 +288,11 @@ class RAGService:
                             if score and score >= captured_threshold:
                                 node_obj = node.node if hasattr(node, "node") else node
                                 node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
+                                logger.debug(f"[kd_vector_query] kb={captured_kb_name} Score: {score} Text: {node_text[:100]} metadata: {node_obj.metadata}")
                                 results.append({
                                     "score": round(score, 4),
                                     "text": node_text,
+                                    "metadata": node_obj.metadata,
                                 })
                         return json.dumps(results, ensure_ascii=False) if results else "[]"
                     except Exception as e:
@@ -454,29 +396,26 @@ class RAGService:
             response = await handler
             # 从 Agent 的工具调用结果中提取 sources
             # FunctionAgent 的 response 是 AgentOutput
-            final_text = str(response)
+            final_text = str(response)     
+            # 获取所有的工具调用
+            doc_ids = set()
+            for tool_call in response.tool_calls:
+                tool_result = json.loads(tool_call.tool_output.blocks[0].text)
+                for item in tool_result:
+                    if isinstance(item, dict):        
+                        doc_id = item.get("metadata", {}).get("doc_id")
+                        doc_ids.add(int(doc_id))
 
-            # 尝试从 chat_history memory 中获取工具调用结果作为 sources
-            try:
-                all_messages = memory.get_all()
-                for msg in all_messages:
-                    # 工具返回的消息包含检索的 JSON
-                    if msg.role == "tool" and msg.content:
-                        try:
-                            chunks = json.loads(msg.content)
-                            if isinstance(chunks, list):
-                                for chunk in chunks:
-                                    if isinstance(chunk, dict) and "score" in chunk:
-                                        sources_data.append({
-                                            "score": chunk["score"],
-                                            "text_preview": chunk.get("text", "")[:200],
-                                        })
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-            except Exception as e:
-                logger.warning(f"[Agent] Failed to extract sources from memory: {e}")
+            for doc_id in doc_ids:
+                doc = await Document.get(id=doc_id)
+                if doc:
+                    sources_data.append({
+                        "metadata": {
+                            "title": doc.title,
+                            "url": doc.source_meta.get("feishu_url"),
+                        }
+                    })
 
-            # 最后发送 sources
             yield {"type": "sources", "content": sources_data}
 
         except BaseException as e:
@@ -499,3 +438,5 @@ class RAGService:
 
 
 rag_service = RAGService()
+
+                        

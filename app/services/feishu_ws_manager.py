@@ -153,17 +153,17 @@ class FeishuBotClientManager:
         """异步处理消息：调用 RAG 问答并回复"""
         try:
             # 调用业务逻辑处理消息
-            # result = await document_pipeline.handle_bot_message(
-            #     bot_id=bot_id,
-            #     feishu_open_id=sender_open_id,
-            #     chat_id=chat_id,
-            #     question=question,
-            # )
+            result = await document_pipeline.handle_bot_message(
+                bot_id=bot_id,
+                feishu_open_id=sender_open_id,
+                chat_id=chat_id,
+                question=question,
+            )
 
-            result = {
-                "answer": "我已收到您的问题：" + question,
-                "sources": []
-            }
+            # result = {
+            #     "answer": "我已收到您的问题：" + question,
+            #     "sources": []
+            # }
 
             answer = result.get("answer", "抱歉，暂时无法回答您的问题。")
             sources = result.get("sources", [])
