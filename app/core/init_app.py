@@ -359,6 +359,19 @@ async def init_vector_store():
         logger.warning(f"Vector store initialization skipped: {e}")
 
 
+async def init_feishu_ws_clients():
+    """初始化飞书机器人长连接客户端"""
+    import asyncio
+    from app.services.feishu_ws_manager import feishu_ws_manager
+
+    try:
+        # 将当前事件循环传给管理器，用于同步回调中调度异步任务
+        feishu_ws_manager.set_event_loop(asyncio.get_running_loop())
+        await feishu_ws_manager.start_all()
+    except Exception as e:
+        logger.warning(f"Feishu WS clients initialization skipped: {e}")
+
+
 async def init_data():
     await init_db()
     await init_superuser()
@@ -366,3 +379,4 @@ async def init_data():
     await init_apis()
     await init_roles()
     await init_vector_store()
+    await init_feishu_ws_clients()

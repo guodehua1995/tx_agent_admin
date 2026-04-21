@@ -21,6 +21,8 @@ except ImportError:
 async def lifespan(app: FastAPI):
     await init_data()
     yield
+    from app.services.feishu_ws_manager import feishu_ws_manager
+    await feishu_ws_manager.stop_all()
     await Tortoise.close_connections()
 
 
