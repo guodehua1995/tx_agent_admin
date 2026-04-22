@@ -33,7 +33,7 @@ def _make_kd_query_tool_fn(retriever, kb_name: str, threshold: float):
         from llama_index.core.indices.query.schema import QueryBundle
         from app.services.rag_node_processors import MetadataFilterPostProcessor
 
-        logger.debug(f"[kd_vector_query] kb={kb_name} Query: {query}")
+        # logger.debug(f"[kd_vector_query] kb={kb_name} Query: {query}")
         try:
             nodes = await retriever.aretrieve(query)
             processor = MetadataFilterPostProcessor(METADATA_KEEP_KEYS)
@@ -45,10 +45,10 @@ def _make_kd_query_tool_fn(retriever, kb_name: str, threshold: float):
                 if score and score >= threshold:
                     node_obj = node.node if hasattr(node, "node") else node
                     node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
-                    logger.debug(
-                        f"[kd_vector_query] kb={kb_name} Score: {score} "
-                        f"Text: {node_text[:100]} metadata: {node_obj.metadata}"
-                    )
+                    # logger.debug(
+                    #     f"[kd_vector_query] kb={kb_name} Score: {score} "
+                    #     f"Text: {node_text[:100]} metadata: {node_obj.metadata}"
+                    # )
                     results.append({
                         "score": round(score, 4),
                         "text": node_text,
@@ -306,7 +306,7 @@ class RAGService:
         doc_ids = set()
         for tool_call in tool_calls:
             try:
-                tool_result = json.loads(tool_call.content)
+                tool_result = json.loads(tool_call.tool_output.blocks[0].text)
                 for item in tool_result:
                     if isinstance(item, dict):
                         doc_id = item.get("metadata", {}).get("doc_id")
