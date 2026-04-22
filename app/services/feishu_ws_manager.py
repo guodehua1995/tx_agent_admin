@@ -101,7 +101,9 @@ class FeishuBotClientManager:
                 sender_id = sender.sender_id.open_id
                 bot_id = bot.id
 
-                logger.info(f"[FeishuWS] 收到消息: bot={bot.name}, sender={sender_id}, text={text[:50]}...")
+                
+
+                logger.debug(f"[FeishuWS] 收到消息: bot={bot.name}, sender={sender_id}, text={text[:50]}...")
 
                 # 从同步回调中调度异步处理
                 if self._loop and self._loop.is_running():
@@ -112,7 +114,7 @@ class FeishuBotClientManager:
                 else:
                     logger.error("[FeishuWS] 事件循环未就绪，无法处理消息")
             except Exception as e:
-                logger.exception(f"[FeishuWS] 消息处理异常: bot={bot.name}")
+                logger.exception(f"[FeishuWS] 消息处理异常: bot={bot.name}", e)
 
         # 构建事件处理器
         event_handler = (
@@ -126,7 +128,7 @@ class FeishuBotClientManager:
             app_id=bot.app_id,
             app_secret=bot.app_secret,
             event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=lark.LogLevel.ERROR,
         )
 
     
@@ -159,11 +161,6 @@ class FeishuBotClientManager:
                 chat_id=chat_id,
                 question=question,
             )
-
-            # result = {
-            #     "answer": "我已收到您的问题：" + question,
-            #     "sources": []
-            # }
 
             answer = result.get("answer", "抱歉，暂时无法回答您的问题。")
             sources = result.get("sources", [])

@@ -87,14 +87,19 @@ class FeishuService:
             title = src.get("metadata", {}).get("title", "未知来源")
             url = src.get("metadata", {}).get("url")
             source_elements += f"[{title}]({url})\n"
+        
+        elemsnts = [
+                {"tag": "div", "text": {"tag": "lark_md", "content": answer}},
+        ]
+        if source_elements:
+            elemsnts.extend([
+                {"tag": "hr"},
+                {"tag": "div", "text": {"tag": "lark_md", "content": "参考来源:\n" + source_elements}},
+            ])
 
         return {
             "config": {"wide_screen_mode": True},
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": answer}},
-                {"tag": "hr"},
-                {"tag": "div", "text": {"tag": "lark_md", "content": "参考来源:\n" + source_elements}},
-            ],
+            "elements":elemsnts,
         }
 
     async def create_doc_in_folder(self, folder_token: str, title: str, content: str, access_token: str) -> str:
