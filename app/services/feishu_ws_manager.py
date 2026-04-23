@@ -101,6 +101,7 @@ class FeishuBotClientManager:
                 sender_id = sender.sender_id.open_id
                 bot_id = bot.id
 
+                # TODO 通过open_id获取用户信息 如果用户不存在则返回card 提示用户无权限
                 
 
                 logger.debug(f"[FeishuWS] 收到消息: bot={bot.name}, sender={sender_id}, text={text[:50]}...")
@@ -178,6 +179,15 @@ class FeishuBotClientManager:
                 msg_type="interactive",
             )
             logger.info(f"[FeishuWS] 已回复: bot_id={bot_id}, chat_id={chat_id}")
+        except ValueError as e:
+            logger.error(f"[FeishuWS] 处理消息失败: bot_id={bot_id}", e)
+            await self._feishu_service.send_message(
+                app_id=bot.app_id,
+                app_secret=bot.app_secret,
+                chat_id=chat_id,
+                content=json.dumps({"text": str(e)}),
+                msg_type="text",
+            )
         except Exception as e:
             logger.exception(f"[FeishuWS] 处理消息失败: bot_id={bot_id}")
             # 尝试发送错误提示
