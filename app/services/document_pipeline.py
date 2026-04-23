@@ -212,12 +212,13 @@ class DocumentPipeline:
         # 2. feishu_open_id → user
         user = await User.filter(feishu_open_id=feishu_open_id).first()
         if not user:
-            user = await User.create(
-                username=f"feishu_{feishu_open_id[:8]}",
-                email=f"{feishu_open_id[:8]}@feishu.local",
-                feishu_open_id=feishu_open_id,
-                is_active=True,
-            )
+            # user = await User.create(
+            #     username=f"feishu_{feishu_open_id[:8]}",
+            #     email=f"{feishu_open_id[:8]}@feishu.local",
+            #     feishu_open_id=feishu_open_id,
+            #     is_active=True,
+            # )
+            raise ValueError("用户不存在")
 
         # 3. 获取/创建 conversation
         conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user.id)
