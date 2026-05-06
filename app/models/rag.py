@@ -109,9 +109,24 @@ class Agent(BaseModel, TimestampMixin):
     knowledge_bases = fields.ManyToManyField(
         "models.KnowledgeBase", related_name="agents", through="agent_knowledge_base"
     )
+    doc_templates = fields.ManyToManyField(
+        "models.DocTemplate", related_name="agents", through="agent_doc_template"
+    )
 
     class Meta:
         table = "agent"
+
+
+class DocTemplate(BaseModel, TimestampMixin):
+    name = fields.CharField(max_length=100, description="模板名称")
+    markdown_content = fields.TextField(description="Markdown模板内容")
+    folder_token = fields.CharField(max_length=200, description="飞书文件夹Token")
+    description = fields.TextField(description="模板描述(告知AI使用场景)")
+    naming_format = fields.CharField(max_length=200, null=True, description="命名格式")
+    is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
+
+    class Meta:
+        table = "doc_template"
 
 
 class FeishuBotConfig(BaseModel, TimestampMixin):

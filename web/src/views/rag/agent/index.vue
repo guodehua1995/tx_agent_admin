@@ -43,6 +43,7 @@ const vPermission = resolveDirective('permission')
 
 const chatModelOptions = ref([])
 const kbOptions = ref([])
+const docTemplateOptions = ref([])
 
 const {
   modalVisible,
@@ -51,18 +52,35 @@ const {
   modalLoading,
   handleAdd,
   handleDelete,
-  handleEdit,
+  handleEdit: _handleEdit,
   handleSave,
   modalForm,
   modalFormRef,
 } = useCRUD({
   name: 'Agent',
-  initForm: { max_history_turns: 10, is_active: true, knowledge_base_ids: [] },
+  initForm: {
+    max_history_turns: 10,
+    is_active: true,
+    knowledge_base_ids: [],
+    doc_template_ids: [],
+  },
   doCreate: api.createAgent,
   doDelete: api.deleteAgent,
   doUpdate: api.updateAgent,
   refresh: () => $table.value?.handleSearch(),
 })
+
+function handleEdit(row) {
+  const formData = { ...row }
+  // Map M2M fields to id arrays
+  if (row.doc_templates) {
+    formData.doc_template_ids = row.doc_templates.map((t) => t.id)
+  }
+  if (row.knowledge_bases) {
+    formData.knowledge_base_ids = row.knowledge_bases.map((kb) => kb.id)
+  }
+  _handleEdit(formData)
+}
 
 // Chat drawer state
 const chatDrawerVisible = ref(false)
@@ -75,15 +93,20 @@ const chatStreaming = ref(false) // 流式输出中
 const currentStreamContent = ref('') // 当前流式内容
 
 async function loadOptions() {
-  const [modelRes, kbRes] = await Promise.all([
+  const [modelRes, kbRes, tplRes] = await Promise.all([
     api.getAiConfigList({ is_embedding: false, page: 1, page_size: 9999 }),
     api.getKnowledgeBaseList({ page: 1, page_size: 9999 }),
+    api.getDocTemplateOptions(),
   ])
   chatModelOptions.value = (modelRes.data || []).map((item) => ({
     label: item.name,
     value: item.id,
   }))
   kbOptions.value = (kbRes.data || []).map((item) => ({ label: item.name, value: item.id }))
+  docTemplateOptions.value = (tplRes.data || []).map((item) => ({
+    label: item.name,
+    value: item.id,
+  }))
 }
 
 function getChatModelName(id) {
@@ -390,6 +413,14 @@ const columns = [
             placeholder="请选择关联知识库"
           />
         </NFormItem>
+        <NFormItem label="绑定模板" path="doc_template_ids">
+          <NSelect
+            v-model:value="modalForm.doc_template_ids"
+            multiple
+            :options="docTemplateOptions"
+            placeholder="请选择绑定文档模板"
+          />
+        </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />
         </NFormItem>
@@ -414,6 +445,7 @@ const columns = [
                   v-if="msg.role === 'user'"
                   :style="{
                     background: '#e8f4fd',
+                    color: '#333',
                     padding: '8px 12px',
                     borderRadius: '8px',
                     display: 'inline-block',

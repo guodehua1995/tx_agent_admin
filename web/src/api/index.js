@@ -92,6 +92,15 @@ export default {
   createFeishuBot: (data = {}) => request.post('/feishu/bot/create', data),
   updateFeishuBot: (data = {}) => request.post('/feishu/bot/update', data),
   deleteFeishuBot: (params = {}) => request.delete('/feishu/bot/delete', { params }),
+  // Doc Template
+  getDocTemplateList: (params = {}) => request.get('/doc_template/list', { params }),
+  getDocTemplate: (params = {}) => request.get('/doc_template/get', { params }),
+  createDocTemplate: (data = {}) => request.post('/doc_template/create', data),
+  updateDocTemplate: (data = {}) => request.post('/doc_template/update', data),
+  deleteDocTemplate: (params = {}) => request.delete('/doc_template/delete', { params }),
+  parseDocTemplateUrl: (data = {}) => request.post('/doc_template/parse_url', data, {timeout: 600000}),
+  getDocTemplateOptions: () => request.get('/doc_template/options'),
+  generateDoc: (data = {}) => request.post('/doc_template/generate', data),
   // Conversation
   getConversationList: (params = {}) => request.get('/feishu/conversations', { params }),
   getMessageList: (params = {}) => request.get('/feishu/messages', { params }),

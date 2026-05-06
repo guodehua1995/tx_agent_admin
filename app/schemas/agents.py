@@ -11,6 +11,7 @@ class AgentCreate(BaseModel):
     max_history_turns: int = Field(10, description="历史对话轮数")
     is_active: bool = Field(True, description="是否启用")
     knowledge_base_ids: Optional[List[int]] = Field([], description="关联知识库ID列表")
+    doc_template_ids: Optional[List[int]] = Field([], description="关联文档模板ID列表")
 
 
 class AgentUpdate(BaseModel):
@@ -22,6 +23,7 @@ class AgentUpdate(BaseModel):
     max_history_turns: Optional[int] = None
     is_active: Optional[bool] = None
     knowledge_base_ids: Optional[List[int]] = None
+    doc_template_ids: Optional[List[int]] = None
 
 
 class UpdateKnowledgeBases(BaseModel):

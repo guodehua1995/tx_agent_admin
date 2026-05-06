@@ -47,6 +47,8 @@ async def create_agent(agent_in: AgentCreate):
     obj = await agent_controller.create(agent_in)
     if agent_in.knowledge_base_ids:
         await agent_controller.update_knowledge_bases(obj, agent_in.knowledge_base_ids)
+    if agent_in.doc_template_ids:
+        await agent_controller.update_doc_templates(obj, agent_in.doc_template_ids)
     logger.info("[Agent] Created: name=%s, id=%s", agent_in.name, obj.id)
     return Success(msg="创建成功")
 
@@ -55,9 +57,11 @@ async def create_agent(agent_in: AgentCreate):
 async def update_agent(agent_in: AgentUpdate):
     if agent_in.chat_model_id is not None and not await LLMProviderConfig.exists(id=agent_in.chat_model_id):
         return Fail(msg="对话模型配置不存在")
-    obj = await agent_controller.update(id=agent_in.id, obj_in=agent_in.model_dump(exclude_unset=True, exclude={"id", "knowledge_base_ids"}))
+    obj = await agent_controller.update(id=agent_in.id, obj_in=agent_in.model_dump(exclude_unset=True, exclude={"id", "knowledge_base_ids", "doc_template_ids"}))
     if agent_in.knowledge_base_ids is not None:
         await agent_controller.update_knowledge_bases(obj, agent_in.knowledge_base_ids)
+    if agent_in.doc_template_ids is not None:
+        await agent_controller.update_doc_templates(obj, agent_in.doc_template_ids)
     logger.info("[Agent] Updated: id=%s", agent_in.id)
     return Success(msg="更新成功")
 
@@ -91,6 +95,9 @@ async def chat_with_agent(chat_in: ChatRequest):
     if not knowledge_bases:
         return Fail(msg="该Agent未关联任何知识库")
 
+    # 加载绑定的文档模板
+    doc_templates = await agent.doc_templates.filter(is_deleted=False).all()
+
     conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
 
     recent_messages = await conversation_controller.get_messages(
@@ -107,6 +114,7 @@ async def chat_with_agent(chat_in: ChatRequest):
         knowledge_bases=list(knowledge_bases),
         chat_model_config=chat_model,
         system_prompt=agent.system_prompt,
+        doc_templates=list(doc_templates) if doc_templates else None,
     )
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -151,6 +159,9 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
     if not knowledge_bases:
         return Fail(msg="该Agent未关联任何知识库")
 
+    # 加载绑定的文档模板
+    doc_templates = await agent.doc_templates.filter(is_deleted=False).all()
+
     conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
 
     recent_messages = await conversation_controller.get_messages(
@@ -174,6 +185,7 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
                 knowledge_bases=list(knowledge_bases),
                 chat_model_config=chat_model,
                 system_prompt=agent.system_prompt,
+                doc_templates=list(doc_templates) if doc_templates else None,
             ):
                 chunk_type = chunk.get("type")
                 content = chunk.get("content", "")
