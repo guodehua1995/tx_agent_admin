@@ -10,10 +10,10 @@ from app.log import logger
 from app.models.rag import Document, KnowledgeBase, LLMProviderConfig
 from app.services.llm_builder import build_embed_model, build_llm
 from app.settings import settings
+from app.agents.tools import KdVectorQueryToolProvider
 
 DEFAULT_CONTEXT_WINDOW = 8192
 MAX_HISTORY_MESSAGES = 10
-METADATA_KEEP_KEYS = ["doc_id"]
 
 
 def _build_kb_filters(kb_ids: list[str]) -> MetadataFilters:
@@ -24,42 +24,6 @@ def _build_kb_filters(kb_ids: list[str]) -> MetadataFilters:
         filters=[ExactMatchFilter(key="knowledge_base_id", value=kb_id) for kb_id in kb_ids],
         condition="or",
     )
-
-
-def _make_kd_query_tool_fn(retriever, kb_name: str, threshold: float):
-    """工厂函数：生成知识库向量查询工具"""
-    async def kd_vector_query(query: str, metadata_filters: Optional[dict] = None) -> str:
-        """在知识库中执行向量检索，返回匹配文档片段的 JSON 字符串"""
-        from llama_index.core.indices.query.schema import QueryBundle
-        from app.services.rag_node_processors import MetadataFilterPostProcessor
-
-        # logger.debug(f"[kd_vector_query] kb={kb_name} Query: {query}")
-        try:
-            nodes = await retriever.aretrieve(query)
-            processor = MetadataFilterPostProcessor(METADATA_KEEP_KEYS)
-            nodes = processor.postprocess_nodes(nodes, query_bundle=QueryBundle(query))
-
-            results = []
-            for node in nodes:
-                score = getattr(node, "score", None)
-                if score and score >= threshold:
-                    node_obj = node.node if hasattr(node, "node") else node
-                    node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
-                    # logger.debug(
-                    #     f"[kd_vector_query] kb={kb_name} Score: {score} "
-                    #     f"Text: {node_text[:100]} metadata: {node_obj.metadata}"
-                    # )
-                    results.append({
-                        "score": round(score, 4),
-                        "text": node_text,
-                        "metadata": node_obj.metadata,
-                    })
-            return json.dumps(results, ensure_ascii=False) if results else "[]"
-        except Exception as e:
-            logger.error(f"[kd_vector_query] Error in {kb_name}: {e}")
-            return json.dumps([{"error": str(e)}], ensure_ascii=False)
-
-    return kd_vector_query
 
 
 class RAGService:
@@ -186,6 +150,7 @@ class RAGService:
         knowledge_bases: list[KnowledgeBase],
         chat_model_config: LLMProviderConfig,
         system_prompt: str = None,
+        doc_templates: list = None,
     ) -> dict:
         """多轮对话问答（非流式）— 复用 chat_stream 的 FunctionAgent 架构"""
         try:
@@ -198,6 +163,7 @@ class RAGService:
                 knowledge_bases=knowledge_bases,
                 chat_model_config=chat_model_config,
                 system_prompt=system_prompt,
+                doc_templates=doc_templates,
             ):
                 if event["type"] == "delta":
                     answer_parts.append(event["content"])
@@ -210,57 +176,7 @@ class RAGService:
         except Exception as e:
             logger.error(f"Chat error: {e}")
             return {"answer": str(e), "sources": []}
-
-    # ------------------------------------------------------------------
-    # 知识库向量查询工具构建器
-    # ------------------------------------------------------------------
-
-    async def kd_vector_tools_builder(
-        self,
-        knowledge_bases: list[KnowledgeBase],
-        chat_model_config: LLMProviderConfig,
-    ) -> list:
-        """为每个知识库构建一个可被 Agent 调用的 FunctionTool"""
-        from llama_index.core.tools import FunctionTool
-
-        tools = []
-        for kb in knowledge_bases:
-            index = await self._build_index(kb.embedding_model_id)
-            query_mode = "hybrid" if kb.retrieval_mode == "hybrid" else "default"
-
-            retriever = index.as_retriever(
-                similarity_top_k=kb.similarity_top_k,
-                filters=MetadataFilters(
-                    filters=[ExactMatchFilter(key="knowledge_base_id", value=str(kb.id))]
-                ),
-                vector_store_query_mode=query_mode,
-            )
-
-            kb_name = kb.name
-            kb_desc = kb.description or kb.name
-            kb_threshold = kb.similarity_threshold
-
-            logger.debug(f"[kd_vector_tools_builder] Building tool for kb={kb_name} desc={kb_desc}")
-
-            kd_query_fn = _make_kd_query_tool_fn(retriever, kb_name, kb_threshold)
-
-            tool_name = f"kd_query_{kb.id}"
-            tool_desc = (
-                f"在「{kb_name}」知识库中检索与问题相关的文档内容。"
-                f"{kb_desc}。"
-                f"输入参数 query 为检索关键词/问题，metadata_filters 为可选的元数据过滤条件。"
-            )
-
-            tool = FunctionTool.from_defaults(
-                fn=kd_query_fn,
-                name=tool_name,
-                description=tool_desc,
-            )
-            tools.append(tool)
-            logger.debug(f"[kd_vector_tools_builder] Built tool: {tool_name} for kb={kb_name} desc={kb_desc}")
-
-        return tools
-
+    
     async def _build_chat_agent(
         self,
         history: list[dict],
@@ -335,19 +251,37 @@ class RAGService:
         knowledge_bases: list[KnowledgeBase],
         chat_model_config: LLMProviderConfig,
         system_prompt: str = None,
+        doc_templates: list = None,
     ):
-        """多轮对话问答（流式）— 使用 FunctionAgent + 知识库向量工具"""
+        """多轮对话问答（流式）— 使用 FunctionAgent + 知识库向量工具 + 文档模板工具"""
         from llama_index.core.agent.workflow import AgentStream
 
         try:
-            kd_tools = await self.kd_vector_tools_builder(
+
+            provider = KdVectorQueryToolProvider(self._vector_store)
+            kd_tools = await provider.build_llamaindex_tools(
                 knowledge_bases=knowledge_bases,
                 chat_model_config=chat_model_config,
             )
 
+            # kd_tools = await self.kd_vector_tools_builder(
+            #     knowledge_bases=knowledge_bases,
+            #     chat_model_config=chat_model_config,
+            # )
+
             if not kd_tools:
                 yield {"type": "error", "content": "未构建到任何知识库查询工具"}
                 return
+
+            # 通过统一工具入口构建所有工具
+            from app.agents.tools import build_chat_tools
+            kd_tools = await build_chat_tools(
+                framework="llamaindex",
+                vector_store=self._vector_store,
+                knowledge_bases=knowledge_bases,
+                chat_model_config=chat_model_config,
+                doc_templates=doc_templates,
+            )
 
             agent, chat_history = await self._build_chat_agent(
                 history=history,

@@ -1,3 +1,5 @@
+import asyncio
+import base64
 import logging
 import re
 from typing import Optional
@@ -156,6 +158,77 @@ class FeishuService:
             auth_token=access_token,
         )
         return data.get("data", {}).get("user", {})
+
+    async def upload_media_for_import(self, file_content: bytes, file_name: str, access_token: str) -> str:
+        """上传文件到飞书用于导入，返回 file_token"""
+        url = f"{self._base_url}/drive/v1/medias/upload_all"
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
+            resp = await client.post(
+                url,
+                headers=headers,
+                data={
+                    "file_name": file_name,
+                    "parent_type": "explorer",
+                    "parent_node": "",
+                    "size": str(len(file_content)),
+                },
+                files={"file": (file_name, file_content, "application/octet-stream")},
+            )
+            data = resp.json()
+
+        code = data.get("code")
+        if code is not None and code != 0:
+            raise FeishuAPIError(data.get("msg", "文件上传失败"), code=code)
+        return data["data"]["file_token"]
+
+    async def import_markdown_to_folder(
+        self, folder_token: str, title: str, markdown_content: str, access_token: str
+    ) -> str:
+        """通过飞书导入API将Markdown内容创建为飞书云文档
+
+        流程: 上传md文件 -> 创建导入任务 -> 轮询完成 -> 返回文档URL
+        """
+        import asyncio
+
+        # 1. 上传markdown内容作为文件
+        file_bytes = markdown_content.encode("utf-8")
+        file_name = f"{title}.md"
+        file_token = await self.upload_media_for_import(file_bytes, file_name, access_token)
+
+        # 2. 创建导入任务
+        data = await self._post(
+            "/drive/v1/import_tasks",
+            auth_token=access_token,
+            json={
+                "file_extension": "md",
+                "file_token": file_token,
+                "type": "docx",
+                "point": {
+                    "mount_type": 1,
+                    "mount_key": folder_token,
+                },
+            },
+        )
+        ticket = data["data"]["ticket"]
+
+        # 3. 轮询导入任务状态 (最多30秒)
+        for _ in range(15):
+            await asyncio.sleep(2)
+            result = await self._get(
+                f"/drive/v1/import_tasks/{ticket}",
+                auth_token=access_token,
+            )
+            job_status = result.get("data", {}).get("result", {}).get("job_status", 0)
+            if job_status == 0:
+                doc_token = result["data"]["result"]["token"]
+                return f"https://my.feishu.cn/docx/{doc_token}"
+            elif job_status >= 100:
+                error_msg = result.get("data", {}).get("result", {}).get("job_error_msg", "导入失败")
+                raise FeishuAPIError(f"飞书文档导入失败: {error_msg}")
+
+        raise FeishuAPIError("飞书文档导入超时，请稍后重试")
 
 
 feishu_service = FeishuService()
