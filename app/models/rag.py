@@ -5,6 +5,7 @@ from .enums import (
     ChunkMode,
     DocumentSourceType,
     DocumentStatus,
+    DocumentTypeCode,
     FeishuPublishStatus,
     LLMProviderType,
     MessageRole,
@@ -27,17 +28,6 @@ class LLMProviderConfig(BaseModel, TimestampMixin):
 
     class Meta:
         table = "llm_provider_config"
-
-
-class DocumentType(BaseModel, TimestampMixin):
-    name = fields.CharField(max_length=100, unique=True, description="类型名")
-    code = fields.CharField(max_length=50, unique=True, description="机器码")
-    needs_structuring = fields.BooleanField(default=False, description="是否需要AI结构化")
-    is_active = fields.BooleanField(default=True, description="是否启用")
-    description = fields.TextField(null=True, description="描述")
-
-    class Meta:
-        table = "document_type"
 
 
 class KnowledgeBase(BaseModel, TimestampMixin):
@@ -63,7 +53,7 @@ class Document(BaseModel, TimestampMixin):
     source_type = fields.CharEnumField(DocumentSourceType, description="来源类型")
     source_meta = fields.JSONField(null=True, description="来源元数据")
     content = fields.TextField(null=True, description="清洗后的文本内容")
-    doc_type_id = fields.IntField(description="文档类型ID -> document_type.id")
+    doc_type_code = fields.CharEnumField(DocumentTypeCode, default=DocumentTypeCode.FEISHU_DOC, description="文档类型编码")
     knowledge_base_id = fields.IntField(description="知识库ID -> knowledge_base.id")
     status = fields.CharEnumField(DocumentStatus, default=DocumentStatus.PENDING_FETCH, description="处理状态")
     uploader_id = fields.IntField(description="上传者ID -> user.id")

@@ -3,16 +3,14 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Query
 from tortoise.expressions import Q
 
-from app.controllers.document import document_controller, document_type_controller
+from app.controllers.document import document_controller
 from app.core.ctx import CTX_USER_ID
-from app.models.rag import DocumentType, KnowledgeBase
+from app.models.enums import DocumentTypeCode, DocumentStatus
+from app.models.rag import KnowledgeBase
 from app.schemas.base import Fail, Success, SuccessExtra
-from app.models.enums import DocumentStatus
 from app.schemas.documents import (
     DocumentCreate,
     DocumentSubmitForReview,
-    DocumentTypeCreate,
-    DocumentTypeUpdate,
     DocumentUpdate,
 )
 from app.services.document_pipeline import document_pipeline
@@ -31,7 +29,7 @@ async def list_document(
     page_size: int = Query(10, description="每页数量"),
     title: str = Query("", description="标题搜索"),
     status: str = Query("", description="状态过滤"),
-    doc_type_id: int = Query(None, description="文档类型ID"),
+    doc_type_code: str = Query("", description="文档类型编码"),
     knowledge_base_id: int = Query(None, description="知识库ID"),
     source_type: str = Query("", description="来源类型"),
 ):
@@ -40,8 +38,8 @@ async def list_document(
         q &= Q(title__contains=title)
     if status:
         q &= Q(status=status)
-    if doc_type_id is not None:
-        q &= Q(doc_type_id=doc_type_id)
+    if doc_type_code:
+        q &= Q(doc_type_code=doc_type_code)
     if knowledge_base_id is not None:
         q &= Q(knowledge_base_id=knowledge_base_id)
     if source_type:
@@ -59,8 +57,11 @@ async def get_document(document_id: int = Query(..., description="文档ID")):
 
 @router.post("/create", summary="创建文档")
 async def create_document(doc_in: DocumentCreate, background_tasks: BackgroundTasks):
-    if not await DocumentType.exists(id=doc_in.doc_type_id):
-        return Fail(msg="文档类型不存在")
+    # 校验文档类型编码
+    try:
+        DocumentTypeCode(doc_in.doc_type_code)
+    except ValueError:
+        return Fail(msg=f"无效的文档类型编码: {doc_in.doc_type_code}")
     if not await KnowledgeBase.exists(id=doc_in.knowledge_base_id):
         return Fail(msg="知识库不存在")
     obj_dict = doc_in.model_dump()
@@ -109,39 +110,15 @@ async def update_document_content(body: DocumentSubmitForReview):
     return Success(msg="内容已更新，已重新提交审核")
 
 
-# ========== 文档类型 ==========
+# ========== 文档类型（枚举接口，供前端下拉选择） ==========
 
 
-@router.get("/type/list", summary="文档类型列表")
-async def list_document_type(
-    page: int = Query(1, description="页码"),
-    page_size: int = Query(10, description="每页数量"),
-):
-    total, objs = await document_type_controller.list(page=page, page_size=page_size)
-    data = [await obj.to_dict() for obj in objs]
-    return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
-
-
-@router.post("/type/create", summary="创建文档类型")
-async def create_document_type(type_in: DocumentTypeCreate):
-    if await DocumentType.exists(code=type_in.code):
-        return Fail(msg="文档类型编码已存在")
-    if await DocumentType.exists(name=type_in.name):
-        return Fail(msg="文档类型名称已存在")
-    await document_type_controller.create(type_in)
-    logger.info("[DocType] Created: code=%s", type_in.code)
-    return Success(msg="创建成功")
-
-
-@router.post("/type/update", summary="更新文档类型")
-async def update_document_type(type_in: DocumentTypeUpdate):
-    await document_type_controller.update(id=type_in.id, obj_in=type_in)
-    logger.info("[DocType] Updated: id=%s", type_in.id)
-    return Success(msg="更新成功")
-
-
-@router.delete("/type/delete", summary="删除文档类型")
-async def delete_document_type(type_id: int = Query(..., description="文档类型ID")):
-    await document_type_controller.remove(id=type_id)
-    logger.info("[DocType] Deleted: id=%s", type_id)
-    return Success(msg="删除成功")
+@router.get("/type/list", summary="获取文档类型列表")
+async def list_document_type():
+    """返回所有可用的文档类型（纯枚举，无需分页）"""
+    display_map = DocumentTypeCode.get_display_map()
+    data = [
+        {"code": code.value, "name": display_map.get(code, code.value)}
+        for code in DocumentTypeCode
+    ]
+    return Success(data=data)

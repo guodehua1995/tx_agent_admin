@@ -52,11 +52,8 @@ export default {
   createKnowledgeBase: (data = {}) => request.post('/knowledge_base/create', data),
   updateKnowledgeBase: (data = {}) => request.post('/knowledge_base/update', data),
   deleteKnowledgeBase: (params = {}) => request.delete('/knowledge_base/delete', { params }),
-  // Document Type
-  getDocumentTypeList: (params = {}) => request.get('/document/type/list', { params }),
-  createDocumentType: (data = {}) => request.post('/document/type/create', data),
-  updateDocumentType: (data = {}) => request.post('/document/type/update', data),
-  deleteDocumentType: (params = {}) => request.delete('/document/type/delete', { params }),
+  // Document Type (仅提供列表接口，供上传文档时选择)
+  getDocumentTypeList: () => request.get('/document/type/list'),
   // Document
   getDocumentList: (params = {}) => request.get('/document/list', { params }),
   getDocument: (params = {}) => request.get('/document/get', { params }),

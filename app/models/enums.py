@@ -28,6 +28,20 @@ class DocumentSourceType(StrEnum):
     WEB_URL = "web_url"
 
 
+class DocumentTypeCode(StrEnum):
+    """文档类型编码 — 纯后端枚举，根据 code 路由到不同处理函数"""
+    FEISHU_DOC = "feishu_doc"
+    PPT = "ppt"
+
+    @classmethod
+    def get_display_map(cls) -> dict[str, str]:
+        """返回 code → 展示名称 映射"""
+        return {
+            cls.FEISHU_DOC: "飞书文档",
+            cls.PPT: "PPT文档",
+        }
+
+
 class DocumentStatus(StrEnum):
     PENDING_FETCH = "pending_fetch"
     FETCHED = "fetched"
