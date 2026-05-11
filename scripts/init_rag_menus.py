@@ -47,17 +47,12 @@ async def main():
             component="/rag/knowledge-base", keepalive=False,
         ),
         Menu(
-            menu_type=MenuType.MENU, name="文档类型", path="document-type", order=2,
-            parent_id=knowledge_menu.id, icon="carbon:category", is_hidden=False,
-            component="/rag/document-type", keepalive=False,
-        ),
-        Menu(
-            menu_type=MenuType.MENU, name="文档管理", path="document", order=3,
+            menu_type=MenuType.MENU, name="文档管理", path="document", order=2,
             parent_id=knowledge_menu.id, icon="carbon:document-multiple", is_hidden=False,
             component="/rag/document", keepalive=False,
         ),
     ])
-    print(f"  [OK] 知识管理: 1 个目录 + 3 个子菜单")
+    print(f"  [OK] 知识管理: 1 个目录 + 2 个子菜单")
 
     # --- AI应用 ---
     ai_menu = await Menu.create(
@@ -126,7 +121,7 @@ async def main():
     # 将新菜单分配给所有角色
     new_menus = await Menu.filter(
         path__in=[
-            "/rag-knowledge", "knowledge-base", "document-type", "document",
+            "/rag-knowledge", "knowledge-base", "document",
             "/rag-ai", "ai-config", "agent", "review", "dashboard",
             "/rag-feishu", "feishu-bot", "conversation",
         ]
@@ -137,7 +132,7 @@ async def main():
         await role.menus.add(*new_menus)
         print(f"  [OK] 已将新菜单分配给角色: {role.name}")
 
-    print(f"\n[DONE] 共创建 3 个目录 + 9 个子菜单，已分配给 {len(roles)} 个角色。")
+    print(f"\n[DONE] 共创建 3 个目录 + 8 个子菜单，已分配给 {len(roles)} 个角色。")
     await Tortoise.close_connections()
 
 

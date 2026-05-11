@@ -88,6 +88,8 @@ dependencies = [
     "asyncpg>=0.29.0",
     "psycopg2-binary>=2.9.0",
     "trafilatura>=2.0.0",
+    "pdf2image>=1.16.0",
+    "python-pptx>=0.6.21",
 ]
 
 [tool.black]

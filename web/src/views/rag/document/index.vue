@@ -80,7 +80,7 @@ const {
     const payload = {
       title: data.title,
       source_type: data.source_type,
-      doc_type_id: data.doc_type_id,
+      doc_type_code: data.doc_type_code,
       knowledge_base_id: data.knowledge_base_id,
       source_meta: buildSourceMeta(data),
     }
@@ -91,7 +91,7 @@ const {
     const payload = {
       id: data.id,
       title: data.title,
-      doc_type_id: data.doc_type_id,
+      doc_type_code: data.doc_type_code,
       knowledge_base_id: data.knowledge_base_id,
     }
     return api.updateDocument(payload)
@@ -257,15 +257,15 @@ const statusColorMap = {
 
 async function loadOptions() {
   const [typeRes, kbRes] = await Promise.all([
-    api.getDocumentTypeList({ page: 1, page_size: 9999 }),
+    api.getDocumentTypeList(),
     api.getKnowledgeBaseList({ page: 1, page_size: 9999 }),
   ])
-  docTypeOptions.value = (typeRes.data || []).map((item) => ({ label: item.name, value: item.id }))
+  docTypeOptions.value = (typeRes.data || []).map((item) => ({ label: item.name, value: item.code }))
   kbOptions.value = (kbRes.data || []).map((item) => ({ label: item.name, value: item.id }))
 }
 
-function getDocTypeName(id) {
-  return docTypeOptions.value.find((o) => o.value === id)?.label || id
+function getDocTypeName(code) {
+  return docTypeOptions.value.find((o) => o.value === code)?.label || code
 }
 
 function getKbName(id) {
@@ -317,11 +317,11 @@ const columns = [
   },
   {
     title: '文档类型',
-    key: 'doc_type_id',
+    key: 'doc_type_code',
     width: 100,
     align: 'center',
     render(row) {
-      return h('span', getDocTypeName(row.doc_type_id))
+      return h('span', getDocTypeName(row.doc_type_code))
     },
   },
   {
@@ -534,16 +534,15 @@ const columns = [
         </NFormItem>
         <NFormItem
           label="文档类型"
-          path="doc_type_id"
+          path="doc_type_code"
           :rule="{
             required: true,
-            type: 'number',
             message: '请选择文档类型',
             trigger: ['change', 'blur'],
           }"
         >
           <NSelect
-            v-model:value="modalForm.doc_type_id"
+            v-model:value="modalForm.doc_type_code"
             :options="docTypeOptions"
             placeholder="请选择文档类型"
           />
