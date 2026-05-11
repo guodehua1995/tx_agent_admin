@@ -12,6 +12,7 @@ from typing import Literal, Optional
 from app.log import logger
 
 from .base import BaseToolProvider, adapt_to_langchain, adapt_to_llamaindex
+from .current_time_tool import CurrentTimeToolProvider
 from .doc_template_tool import DocTemplateToolProvider
 from .kd_vector_query_tool import KdVectorQueryToolProvider
 from .web_reader_tool import WebReaderToolProvider
@@ -21,6 +22,7 @@ __all__ = [
     "adapt_to_llamaindex",
     "adapt_to_langchain",
     "build_chat_tools",
+    "CurrentTimeToolProvider",
     "DocTemplateToolProvider",
     "KdVectorQueryToolProvider",
     "WebReaderToolProvider",
@@ -78,5 +80,12 @@ async def build_chat_tools(
         tools.extend(await web_provider.build_llamaindex_tools())
     else:
         tools.extend(await web_provider.build_langchain_tools())
+
+    # 4. 当前系统时间工具（默认始终添加）
+    time_provider = CurrentTimeToolProvider()
+    if framework == "llamaindex":
+        tools.extend(await time_provider.build_llamaindex_tools())
+    else:
+        tools.extend(await time_provider.build_langchain_tools())
 
     return tools
