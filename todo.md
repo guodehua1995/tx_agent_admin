@@ -114,6 +114,6 @@ tool 需向 agent 返回 3 类结果：匹配的模板列表（多模板时）�
 
 
 
-## 2026-05-06 已完成
-1. 添加工具 网络内容读取 支持agent输入文件url 返回url文字内容。 当文档url前缀为https://my.feishu.cn/docx时,使用现有的飞书机器人读取飞书文档的方式，返回纯文字飞书文档内容。其它url使用开源且可靠的url转文本框架实现。 rag_service.py内 chat/chat_stream函数中，构建agent时默认添加此工具。工具说明简介清晰。
+## 2026-05-06 
+1. [完成]添加工具 网络内容读取 支持agent输入文件url 返回url文字内容。 当文档url前缀为https://my.feishu.cn/docx时,使用现有的飞书机器人读取飞书文档的方式，返回纯文字飞书文档内容。其它url使用开源且可靠的url转文本框架实现。 rag_service.py内 chat/chat_stream函数中，构建agent时默认添加此工具。工具说明简介清晰。
 2. 添加工具 获取当前系统时间
