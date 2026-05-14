@@ -11,6 +11,7 @@ import {
   NSwitch,
   NTag,
 } from 'naive-ui'
+import { useRouter } from 'vue-router'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -23,6 +24,7 @@ import api from '@/api'
 
 defineOptions({ name: '知识库管理' })
 
+const router = useRouter()
 const $table = ref(null)
 const queryItems = ref({})
 const vPermission = resolveDirective('permission')
@@ -154,11 +156,25 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 160,
+    width: 220,
     align: 'center',
     fixed: 'right',
     render(row) {
       return [
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'info',
+            style: 'margin-right: 8px;',
+            onClick: () =>
+              router.push({ path: '/rag-knowledge/kb-content', query: { kb_id: row.id } }),
+          },
+          {
+            default: () => '管理内容',
+            icon: renderIcon('material-symbols:folder-open-outline', { size: 16 }),
+          }
+        ),
         withDirectives(
           h(
             NButton,

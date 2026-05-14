@@ -9,10 +9,12 @@ from .auditlog import auditlog_router
 from .base import base_router
 from .dashboard import dashboard_router
 from .depts import depts_router
+from .doc_content import router as doc_content_router
 from .doc_templates import doc_templates_router
 from .documents import documents_router
 from .feishu import feishu_router, webhook_router
 from .global_config import global_config_router
+from .kb_content import router as kb_content_router
 from .knowledge_bases import knowledge_bases_router
 from .menus import menus_router
 from .reviews import reviews_router
@@ -39,6 +41,8 @@ v1_router.include_router(feishu_router, prefix="/feishu", dependencies=[DependPe
 v1_router.include_router(doc_templates_router, prefix="/doc_template", dependencies=[DependPermission])
 v1_router.include_router(dashboard_router, prefix="/dashboard", dependencies=[DependPermission])
 v1_router.include_router(global_config_router, prefix="/global_config", dependencies=[DependPermission])
+v1_router.include_router(kb_content_router, prefix="/kb_content", dependencies=[DependPermission])
+v1_router.include_router(doc_content_router, prefix="/doc_content", dependencies=[DependPermission])
 
 # 飞书 Webhook（无认证）
 v1_router.include_router(webhook_router, prefix="/feishu")

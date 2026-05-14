@@ -1,4 +1,6 @@
+import re
 import time
+from pathlib import Path
 
 from app.controllers.ai_config import ai_config_controller
 from app.controllers.conversation import conversation_controller
@@ -16,6 +18,7 @@ from app.models.rag import (
     StructuredResult,
 )
 from app.services.agent_service import agent_service
+from app.services.document_converter import document_converter
 from app.services.feishu_service import feishu_service
 from app.services.rag_service import rag_service
 from app.services.structuring import run_structuring
@@ -23,24 +26,22 @@ from app.settings import settings
 
 from app.log import logger
 
+# 文档转换器支持的文件扩展名（用于 file 类型判断）
+CONVERTIBLE_EXTENSIONS = {"docx", "doc", "pdf", "pptx", "ppt", "xlsx", "xls", "csv", "txt", "md", "png", "jpg", "jpeg"}
+
 
 class DocumentPipeline:
     """文档处理流程编排"""
 
     async def process_document(self, doc_id: int):
-        """文档上传后处理: 根据 doc_type_code 路由到对应处理函数"""
+        """文档上传后处理: 根据来源和类型路由到对应处理函数"""
         doc = await Document.get(id=doc_id)
         try:
-            # 根据文档类型 code 路由到对应处理流程
-            if doc.doc_type_code == DocumentTypeCode.PPT:
-                await self._process_ppt_document(doc)
-                return
-
-            # 默认流程（如 feishu_doc）：获取内容 → 结构化(可选) → 待审核
+            # 飞书文档来源 — 根据 URL 解析结果路由
             if doc.source_type == DocumentSourceType.FEISHU_DOC:
                 content = await self._fetch_feishu_content(doc)
             elif doc.source_type == DocumentSourceType.FILE_UPLOAD:
-                content = await self._read_uploaded_file(doc)
+                content = await self._process_uploaded_file(doc)
             elif doc.source_type == DocumentSourceType.WEB_URL:
                 content = await self._fetch_web_content(doc)
             else:
@@ -50,14 +51,14 @@ class DocumentPipeline:
             doc.status = DocumentStatus.FETCHED
             await doc.save()
 
-            # 2. 检查是否需要结构化（通过 structuring 注册表判断）
+            # 检查是否需要结构化（通过 structuring 注册表判断）
             from app.services.structuring import STRUCTURING_HANDLERS
             if doc.doc_type_code in STRUCTURING_HANDLERS:
                 doc.status = DocumentStatus.STRUCTURING
                 await doc.save()
                 await self._run_structuring(doc)
 
-            # 3. 进入待审核
+            # 进入待审核
             doc.status = DocumentStatus.PENDING_REVIEW
             await doc.save()
             logger.info(f"Document processed: id={doc_id}, status=pending_review")
@@ -68,13 +69,8 @@ class DocumentPipeline:
             await doc.save()
             logger.exception(f"Document processing failed: id={doc_id}")
 
-    async def _fetch_feishu_content(self, doc: Document) -> str:
-        """从飞书拉取文档内容"""
-        meta = doc.source_meta or {}
-        feishu_url = meta.get("feishu_url", "")
-        doc_token, doc_type = feishu_service.parse_feishu_url(feishu_url)
-
-        # 需要通过某个飞书机器人的凭证获取 token
+    async def _get_feishu_access_token(self) -> tuple:
+        """获取飞书拉取机器人的 access_token 和 bot_config"""
         global_config = await GlobalConfig.get(config_key="feishu_pull_bot")
         if not global_config:
             raise ValueError("没有配置飞书拉取机器人")
@@ -83,20 +79,84 @@ class DocumentPipeline:
             raise ValueError("没有可用的飞书机器人配置")
 
         access_token = await feishu_service.get_tenant_access_token(bot_configs.app_id, bot_configs.app_secret)
+        return access_token, bot_configs
+
+    async def _fetch_feishu_content(self, doc: Document) -> str:
+        """从飞书拉取文档内容（根据解析出的 doc_type 路由）"""
+        meta = doc.source_meta or {}
+        feishu_url = meta.get("feishu_url", "")
+        doc_token, doc_type = feishu_service.parse_feishu_url(feishu_url)
+
+        access_token, _ = await self._get_feishu_access_token()
+
+        # file 类型：下载文件 → 文档转换器
+        if doc_type == "file":
+            return await self._process_feishu_file(doc, doc_token, access_token)
+
+        # slide 类型：下载文件 → 文档转换器（slide 不支持 export，但如果是 /file/ 格式就走上面）
+        # 注意：/slides/ URL 的 export API 已不可用，标记为失败
+        if doc_type == "slide":
+            raise ValueError(
+                "飞书云文档PPT(slides类型)不支持通过API导出。"
+                "请使用飞书文件格式的链接(https://xxx.feishu.cn/file/xxx)"
+            )
+
+        # docx/wiki/sheet 类型：走原有 API 拉取内容
         content = await feishu_service.fetch_document_content(doc_token, doc_type, access_token)
-        agent_content = await agent_service.run_agent("doc_to_markdown",{"document_content": content})
+        agent_content = await agent_service.run_agent("doc_to_markdown", {"document_content": content})
         doc.source_meta = {**meta, "feishu_doc_token": doc_token, "feishu_doc_type": doc_type}
         if not agent_content["success"]:
-            raise ValueError(f"Agent execution failed: agent_name=doc_to_markdown")
+            raise ValueError("Agent execution failed: agent_name=doc_to_markdown")
         return agent_content["markdown_content"]
 
-    async def _read_uploaded_file(self, doc: Document) -> str:
-        """读取上传的文件内容"""
+    async def _process_feishu_file(self, doc: Document, file_token: str, access_token: str) -> str:
+        """处理飞书 file 类型：下载文件 → 文档转换器 → Markdown"""
+        meta = doc.source_meta or {}
+
+        # 下载文件
+        file_bytes, filename = await feishu_service.download_file(file_token, access_token)
+        logger.info(f"Feishu file downloaded: token={file_token}, filename={filename}, size={len(file_bytes)}")
+
+        # 从文件名提取扩展名
+        ext = Path(filename).suffix.lstrip(".").lower()
+        if not ext or ext not in CONVERTIBLE_EXTENSIONS:
+            raise ValueError(f"不支持的文件类型: {filename} (扩展名: {ext})")
+
+        # 调用文档转换器
+        pages = await document_converter.convert(file_bytes, ext, filename)
+        markdown_content = document_converter.pages_to_markdown(pages)
+
+        # 更新元数据
+        doc.source_meta = {
+            **meta,
+            "feishu_file_token": file_token,
+            "filename": filename,
+            "file_type": ext,
+            "page_count": len(pages),
+        }
+
+        return markdown_content
+
+    async def _process_uploaded_file(self, doc: Document) -> str:
+        """处理上传的文件：读取 → 文档转换器 → Markdown"""
         meta = doc.source_meta or {}
         file_path = meta.get("file_path", "")
         if not file_path:
             raise ValueError("文件路径为空")
 
+        ext = Path(file_path).suffix.lstrip(".").lower()
+
+        # 如果是文档转换器支持的类型，走转换器
+        if ext in CONVERTIBLE_EXTENSIONS:
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            filename = Path(file_path).name
+            pages = await document_converter.convert(file_bytes, ext, filename)
+            markdown_content = document_converter.pages_to_markdown(pages)
+            doc.source_meta = {**meta, "file_type": ext, "page_count": len(pages)}
+            return markdown_content
+
+        # 其他类型尝试作为纯文本读取
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
 
@@ -113,45 +173,8 @@ class DocumentPipeline:
             resp = await client.get(url, follow_redirects=True)
             return resp.text
 
-    async def _process_ppt_document(self, doc: Document):
-        """PPT 文档专用处理流程: PPT → 图片 → LLM → Markdown → 待审核"""
-        from app.services.ppt_processor import ppt_processor
-
-        meta = doc.source_meta or {}
-
-        try:
-            # 根据来源获取 PPT 内容
-            if doc.source_type == DocumentSourceType.FEISHU_DOC:
-                feishu_url = meta.get("feishu_url", "")
-                if not feishu_url:
-                    raise ValueError("飞书 PPT URL 为空")
-                markdown_content = await ppt_processor.process_from_feishu_url(feishu_url)
-                source_path = feishu_url
-            elif doc.source_type == DocumentSourceType.FILE_UPLOAD:
-                file_path = meta.get("file_path", "")
-                if not file_path:
-                    raise ValueError("PPT 文件路径为空")
-                markdown_content = await ppt_processor.process_from_file_path(file_path)
-                source_path = file_path
-            else:
-                raise ValueError(f"PPT 文档不支持的来源类型: {doc.source_type}")
-
-            # 保存处理后的 markdown 内容
-            doc.content = markdown_content
-            doc.source_meta = {**meta, "ppt_source_path": source_path}
-            doc.status = DocumentStatus.PENDING_REVIEW
-            await doc.save()
-            logger.info(f"PPT document processed: id={doc.id}, status=pending_review")
-
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED
-            doc.error_message = str(e)
-            await doc.save()
-            logger.exception(f"PPT document processing failed: id={doc.id}")
-
     async def _run_structuring(self, doc: Document):
         """执行结构化处理"""
-        # 获取默认的结构化模型
         chat_models = await ai_config_controller.get_active_chat_models()
         if not chat_models:
             raise ValueError("没有可用的 Chat 模型配置")
@@ -172,6 +195,9 @@ class DocumentPipeline:
 
     async def vectorize_document(self, doc_id: int):
         """审核通过后: 确定最终内容 → LlamaIndex 入库"""
+        from llama_index.core.ingestion import IngestionPipeline
+        from llama_index.core.node_parser import MarkdownNodeParser
+        from llama_index.core.schema import Document as LlamaDocument
 
         doc = await Document.get(id=doc_id)
         logger.info(f"Vectorizing document: id={doc_id}, name={doc.title}")
@@ -179,23 +205,25 @@ class DocumentPipeline:
             doc.status = DocumentStatus.VECTORIZING
             await doc.save()
 
-            # 检查文档类型，PPT 走专用分页向量化逻辑
-            if doc.doc_type_code == DocumentTypeCode.PPT:
-                await self._vectorize_ppt_document(doc)
+            # 确定最终内容: 审核编辑 > 结构化 > 原始
+            final_content = doc.content
+            reviews = await review_controller.get_by_document(doc_id)
+            if reviews and reviews[0].edited_content:
+                final_content = reviews[0].edited_content
             else:
-                # 确定最终内容: 审核编辑 > 结构化 > 原始
-                final_content = doc.content
-                reviews = await review_controller.get_by_document(doc_id)
-                if reviews and reviews[0].edited_content:
-                    final_content = reviews[0].edited_content
-                else:
-                    structured = await StructuredResult.filter(document_id=doc_id).first()
-                    if structured:
-                        final_content = structured.structured_content
+                structured = await StructuredResult.filter(document_id=doc_id).first()
+                if structured:
+                    final_content = structured.structured_content
 
-                kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
+            kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
+            meta = doc.source_meta or {}
+            page_count = meta.get("page_count", 0)
+
+            # 多页文档（PPT/PDF等）按页拆分入库
+            if page_count and page_count > 1:
+                await self._vectorize_paged_document(doc, final_content, kb)
+            else:
                 metadata = {"title": doc.title, "source_type": doc.source_type}
-
                 await rag_service.ingest_document(
                     doc_id=str(doc.id),
                     content=final_content,
@@ -213,60 +241,53 @@ class DocumentPipeline:
             await doc.save()
             logger.exception(f"Document vectorization failed: id={doc_id}")
 
-    async def _vectorize_ppt_document(self, doc: Document):
-        """PPT 文档专用向量化: 按页拆分为独立文档入库"""
+    async def _vectorize_paged_document(self, doc: Document, final_content: str, kb: KnowledgeBase):
+        """多页文档向量化: 按页拆分为独立文档入库"""
         from llama_index.core.ingestion import IngestionPipeline
         from llama_index.core.node_parser import MarkdownNodeParser
         from llama_index.core.schema import Document as LlamaDocument
 
-        from app.services.ppt_processor import ppt_processor
-
-        kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
         embedding_config = await LLMProviderConfig.get(id=kb.embedding_model_id)
         from app.services.llm_builder import build_embed_model
         embed_model = build_embed_model(embedding_config)
 
-        # 确定最终内容（审核编辑优先）
-        final_content = doc.content
-        reviews = await review_controller.get_by_document(doc.id)
-        if reviews and reviews[0].edited_content:
-            final_content = reviews[0].edited_content
+        # 按一级标题 "# 第X页" 分割页面
+        pages = re.split(r"(?=^# 第\d+页)", final_content, flags=re.MULTILINE)
+        pages = [p.strip() for p in pages if p.strip()]
 
-        # 按页拆分
+        if not pages:
+            raise ValueError("文档解析后没有有效页面内容")
+
         meta = doc.source_meta or {}
-        source_path = meta.get("ppt_source_path", meta.get("feishu_url", meta.get("file_path", "")))
-        page_docs = ppt_processor.get_page_documents(final_content, source_path)
-
-        if not page_docs:
-            raise ValueError("PPT 文档解析后没有有效页面内容")
+        source_path = meta.get("feishu_url", meta.get("file_path", meta.get("filename", "")))
 
         llama_docs = []
-        for page_data in page_docs:
+        for i, page_text in enumerate(pages, start=1):
             page_metadata = {
                 "title": doc.title,
                 "source_type": doc.source_type,
                 "knowledge_base_id": str(kb.id),
                 "doc_id": str(doc.id),
-                **page_data["metadata"],
+                "source": meta.get("file_type", "unknown"),
+                "source_path": source_path,
+                "page_number": i,
+                "total_pages": len(pages),
             }
             llama_docs.append(
                 LlamaDocument(
-                    text=page_data["text"],
+                    text=page_text,
                     metadata=page_metadata,
-                    doc_id=f"{doc.id}_page_{page_data['metadata']['page_number']}",
+                    doc_id=f"{doc.id}_page_{i}",
                 )
             )
 
-        # 对超长页面使用 Markdown 切割器，短页面直接入库
         node_parser = MarkdownNodeParser()
         pipeline = IngestionPipeline(
             transformations=[node_parser, embed_model],
             vector_store=rag_service._vector_store,
         )
         await pipeline.arun(documents=llama_docs)
-        logger.info(
-            f"PPT document vectorized: doc_id={doc.id}, pages={len(page_docs)}"
-        )
+        logger.info(f"Paged document vectorized: doc_id={doc.id}, pages={len(pages)}")
 
     async def publish_to_feishu(self, structured_result_id: int):
         """将结构化结果发布到飞书云文档"""
@@ -311,12 +332,6 @@ class DocumentPipeline:
         # 2. feishu_open_id → user
         user = await User.filter(feishu_open_id=feishu_open_id).first()
         if not user:
-            # user = await User.create(
-            #     username=f"feishu_{feishu_open_id[:8]}",
-            #     email=f"{feishu_open_id[:8]}@feishu.local",
-            #     feishu_open_id=feishu_open_id,
-            #     is_active=True,
-            # )
             raise ValueError("用户不存在")
 
         # 3. 获取/创建 conversation

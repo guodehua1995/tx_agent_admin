@@ -1,0 +1,69 @@
+version: "3.8"
+
+# ===================================================================
+# Docker Compose 部署配置
+# ===================================================================
+# 使用方式:
+#   方式A - 连接宿主机/远程数据库（推荐开发环境）:
+#     docker-compose up -d --build
+#     (需要在 .env.docker 中配置 DB_HOST=host.docker.internal)
+#
+#   方式B - 容器内数据库（全新环境）:
+#     docker-compose --profile with-db up -d --build
+# ===================================================================
+
+services:
+  # ---------------------------------------------------------------
+  # Gotenberg - 文档转换服务（LibreOffice + Chromium）
+  # ---------------------------------------------------------------
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GOTENBERG_LOG_LEVEL=warn
+
+  # ---------------------------------------------------------------
+  # PostgreSQL + pgvector（仅 with-db profile 时启动）
+  # ---------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    profiles: ["with-db"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: ${DB_NAME:-tx_agent_admin}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------
+  # 应用服务（前端 Nginx + 后端 FastAPI）
+  # ---------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-9999}:80"
+    depends_on:
+      - gotenberg
+    env_file:
+      - .env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - app_tmp:/tmp
+
+volumes:
+  pgdata:
+  app_tmp:

@@ -1,1 +1,16 @@
 web/node_modules
+web/dist
+.venv
+__pycache__
+*.pyc
+.git
+.gitignore
+.env
+.env.docker
+*.md
+tests/
+scripts/
+deploy/sample-picture/
+.mypy_cache
+.pytest_cache
+.ruff_cache

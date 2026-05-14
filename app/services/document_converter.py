@@ -1,0 +1,605 @@
+"""
+通用文档转换器
+
+将多种格式的文件（docx, pdf, pptx, png, jpg, xlsx, csv, txt, md）统一转换为
+结构化的 ConvertedPage 列表，为后续 RAG 切片入库提供标准化输入。
+
+架构：策略模式 + Handler 注册表，新增文件类型只需实现 BaseFileHandler 并注册。
+
+文档转图片依赖 Gotenberg 服务（Docker 容器），通过 HTTP API 调用，
+无需本地安装 LibreOffice。
+"""
+
+import csv
+import os
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from io import BytesIO
+from pathlib import Path
+
+import httpx
+
+from app.log import logger
+from app.settings import settings
+
+
+# ============================================================
+# 数据结构
+# ============================================================
+
+
+@dataclass
+class ConvertedPage:
+    """文档转换后的单页结构"""
+
+    page_number: int  # 页码（从1开始）
+    total_pages: int  # 总页数
+    content: str  # Markdown 文本内容
+    content_type: str  # "text_extracted" | "vision_extracted" | "table_extracted"
+    source_file_type: str  # 原始文件扩展名: "docx"/"pdf"/"pptx" 等
+    metadata: dict = field(default_factory=dict)  # 可扩展元数据
+
+
+# ============================================================
+# 异常定义
+# ============================================================
+
+
+class UnsupportedFileTypeError(Exception):
+    """不支持的文件类型"""
+
+    def __init__(self, file_type: str):
+        super().__init__(f"不支持的文件类型: {file_type}")
+        self.file_type = file_type
+
+
+class ConversionError(Exception):
+    """文档转换过程中的错误"""
+    pass
+
+
+# ============================================================
+# Vision LLM 调用（供多个 Handler 共用）
+# ============================================================
+
+
+# 单页图片理解 System Prompt
+VISION_SYSTEM_PROMPT = """你是一个专业的文档内容解析专家。你的任务是分析文档页面的截图，将其内容转换为结构化的Markdown格式。
+
+要求：
+1. 准确识别页面中的所有文本内容（标题、正文、列表项等）
+2. 保持原始的层级结构和逻辑关系
+3. 识别并描述图表、图片等视觉元素的含义
+4. 如果有表格，使用Markdown表格格式输出
+5. 保留关键的数据和数字信息
+6. 忽略纯装饰性元素（如背景图案、页码等）
+
+输出要求：
+- 只输出该页内容的Markdown文本
+- 不要添加额外解释或前缀
+- 确保Markdown语法正确
+- 不要输出"这一页包含..."之类的描述性文字，直接输出内容"""
+
+
+async def _call_vision_llm(image_bytes: bytes, page_num: int, context: str = "文档") -> str:
+    """调用多模态 LLM 理解图片内容
+
+    Args:
+        image_bytes: PNG 图片字节
+        page_num: 页码
+        context: 上下文描述（如"PPT"/"PDF"）
+
+    Returns:
+        LLM 返回的 Markdown 文本
+    """
+    import base64
+
+    from llama_index.core.llms import ChatMessage, ImageBlock, TextBlock
+    from llama_index.llms.openai_like import OpenAILike
+
+    from app.controllers.ai_config import ai_config_controller
+
+    chat_models = await ai_config_controller.get_active_chat_models()
+    if not chat_models:
+        raise ConversionError("没有可用的 Chat 模型配置，无法处理图片内容")
+    model_config = chat_models[0]
+
+    extra = model_config.extra_config or {}
+    llm = OpenAILike(
+        api_base=model_config.api_base_url,
+        api_key=model_config.api_key,
+        model=model_config.model_name,
+        max_tokens=model_config.max_tokens,
+        temperature=extra.get("temperature", 0.3),
+        is_chat_model=True,
+    )
+
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    image_url = f"data:image/png;base64,{image_b64}"
+
+    messages = [
+        ChatMessage(role="system", content=VISION_SYSTEM_PROMPT),
+        ChatMessage(
+            role="user",
+            blocks=[
+                TextBlock(text=f"请分析以下{context}第 {page_num} 页的内容，将其转换为Markdown格式："),
+                ImageBlock(url=image_url),
+            ],
+        ),
+    ]
+
+    response = await llm.achat(messages)
+    return response.message.content
+
+
+# ============================================================
+# Gotenberg 服务调用（替代本地 LibreOffice）
+# ============================================================
+
+
+def _get_gotenberg_url() -> str:
+    """获取 Gotenberg 服务地址"""
+    return getattr(settings, "GOTENBERG_URL", None) or os.getenv(
+        "GOTENBERG_URL", "http://localhost:3000"
+    )
+
+
+async def _convert_to_pdf_via_gotenberg(file_bytes: bytes, filename: str) -> bytes:
+    """通过 Gotenberg API 将 Office 文件转为 PDF
+
+    Args:
+        file_bytes: 文件二进制内容
+        filename: 文件名（含扩展名，Gotenberg 据此判断格式）
+
+    Returns:
+        PDF 文件的字节内容
+    """
+    gotenberg_url = _get_gotenberg_url()
+    url = f"{gotenberg_url}/forms/libreoffice/convert"
+
+    logger.info(f"[Gotenberg] Converting {filename} to PDF via {gotenberg_url}")
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.post(
+            url,
+            files={"files": (filename, file_bytes)},
+        )
+        if resp.status_code != 200:
+            raise ConversionError(
+                f"Gotenberg 转换失败: status={resp.status_code}, body={resp.text[:200]}"
+            )
+        return resp.content
+
+
+async def _pdf_to_images_via_gotenberg(pdf_bytes: bytes) -> list[bytes]:
+    """通过 Gotenberg API 将 PDF 转为每页 PNG 图片
+
+    Gotenberg 的 /forms/chromium/convert/pdf 不直接支持 PDF→图片，
+    所以这里使用 /forms/pdf/convert/merge 的替代方案：
+    用 PyMuPDF (fitz) 在内存中将 PDF 渲染为图片，不需要 poppler。
+    """
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    images = []
+    for page in doc:
+        # 渲染为 200 DPI 的 PNG
+        mat = fitz.Matrix(200 / 72, 200 / 72)
+        pix = page.get_pixmap(matrix=mat)
+        images.append(pix.tobytes("png"))
+    doc.close()
+
+    logger.info(f"[DocumentConverter] PDF → {len(images)} page images (via PyMuPDF)")
+    return images
+
+
+# ============================================================
+# Handler 基类
+# ============================================================
+
+
+class BaseFileHandler(ABC):
+    """文件处理 Handler 基类"""
+
+    @abstractmethod
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        """处理文件流，返回 ConvertedPage 列表
+
+        Args:
+            file_stream: 文件二进制内容
+            filename: 原始文件名（含扩展名）
+
+        Returns:
+            ConvertedPage 列表
+        """
+        ...
+
+
+# ============================================================
+# Handler 实现
+# ============================================================
+
+
+class DocxHandler(BaseFileHandler):
+    """DOCX 文件处理：mammoth 提取纯文字转 Markdown"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        import mammoth
+
+        result = mammoth.convert_to_markdown(BytesIO(file_stream))
+        content = result.value
+
+        if result.messages:
+            for msg in result.messages:
+                logger.debug(f"[DocxHandler] mammoth message: {msg}")
+
+        if not content.strip():
+            content = "(文档内容为空)"
+
+        return [
+            ConvertedPage(
+                page_number=1,
+                total_pages=1,
+                content=content,
+                content_type="text_extracted",
+                source_file_type="docx",
+                metadata={"filename": filename},
+            )
+        ]
+
+
+class PdfHandler(BaseFileHandler):
+    """PDF 文件处理：每页转图片 → Vision LLM → Markdown"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        # PDF → 每页 PNG（通过 PyMuPDF 在内存中渲染）
+        page_images = await _pdf_to_images_via_gotenberg(file_stream)
+
+        if not page_images:
+            raise ConversionError("PDF 文件没有任何页面内容")
+
+        total = len(page_images)
+        pages = []
+        for i, img_bytes in enumerate(page_images, start=1):
+            logger.info(f"[PdfHandler] Processing page {i}/{total}")
+            try:
+                page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
+                pages.append(
+                    ConvertedPage(
+                        page_number=i,
+                        total_pages=total,
+                        content=page_md,
+                        content_type="vision_extracted",
+                        source_file_type="pdf",
+                        metadata={"filename": filename},
+                    )
+                )
+            except Exception as e:
+                logger.error(f"[PdfHandler] Page {i} failed: {e}")
+                pages.append(
+                    ConvertedPage(
+                        page_number=i,
+                        total_pages=total,
+                        content=f"> [页面处理失败: {str(e)}]",
+                        content_type="vision_extracted",
+                        source_file_type="pdf",
+                        metadata={"filename": filename, "error": str(e)},
+                    )
+                )
+        return pages
+
+
+class PptxHandler(BaseFileHandler):
+    """PPTX 文件处理：Gotenberg → PDF → 每页图片 → Vision LLM → Markdown"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        # PPT → PDF（通过 Gotenberg）
+        pdf_bytes = await _convert_to_pdf_via_gotenberg(file_stream, filename or "input.pptx")
+
+        # PDF → 每页 PNG（通过 PyMuPDF）
+        page_images = await _pdf_to_images_via_gotenberg(pdf_bytes)
+
+        if not page_images:
+            raise ConversionError("PPT 文件没有任何页面内容")
+
+        total = len(page_images)
+        pages = []
+        for i, img_bytes in enumerate(page_images, start=1):
+            logger.info(f"[PptxHandler] Processing page {i}/{total}")
+            try:
+                page_md = await _call_vision_llm(img_bytes, i, context="PPT")
+                pages.append(
+                    ConvertedPage(
+                        page_number=i,
+                        total_pages=total,
+                        content=page_md,
+                        content_type="vision_extracted",
+                        source_file_type="pptx",
+                        metadata={"filename": filename},
+                    )
+                )
+            except Exception as e:
+                logger.error(f"[PptxHandler] Page {i} failed: {e}")
+                pages.append(
+                    ConvertedPage(
+                        page_number=i,
+                        total_pages=total,
+                        content=f"> [页面处理失败: {str(e)}]",
+                        content_type="vision_extracted",
+                        source_file_type="pptx",
+                        metadata={"filename": filename, "error": str(e)},
+                    )
+                )
+        return pages
+
+
+class ImageHandler(BaseFileHandler):
+    """图片文件处理：直接发送给 Vision LLM"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        from PIL import Image
+
+        # 统一转为 PNG
+        img = Image.open(BytesIO(file_stream))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        ext = Path(filename).suffix.lstrip(".").lower() if filename else "png"
+
+        logger.info(f"[ImageHandler] Processing image: {filename}")
+        try:
+            content = await _call_vision_llm(png_bytes, 1, context="图片")
+        except Exception as e:
+            logger.error(f"[ImageHandler] Failed: {e}")
+            content = f"> [图片处理失败: {str(e)}]"
+
+        return [
+            ConvertedPage(
+                page_number=1,
+                total_pages=1,
+                content=content,
+                content_type="vision_extracted",
+                source_file_type=ext,
+                metadata={"filename": filename},
+            )
+        ]
+
+
+class XlsxHandler(BaseFileHandler):
+    """XLSX 文件处理：openpyxl 读取每个 Sheet → Markdown 表格"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(BytesIO(file_stream), read_only=True, data_only=True)
+        pages = []
+        total = len(wb.sheetnames)
+
+        for idx, sheet_name in enumerate(wb.sheetnames, start=1):
+            ws = wb[sheet_name]
+            rows = list(ws.iter_rows(values_only=True))
+
+            if not rows:
+                content = f"(Sheet「{sheet_name}」为空)"
+            else:
+                content = self._rows_to_markdown(rows, sheet_name)
+
+            pages.append(
+                ConvertedPage(
+                    page_number=idx,
+                    total_pages=total,
+                    content=content,
+                    content_type="table_extracted",
+                    source_file_type="xlsx",
+                    metadata={"filename": filename, "sheet_name": sheet_name},
+                )
+            )
+
+        wb.close()
+        return pages
+
+    def _rows_to_markdown(self, rows: list, sheet_name: str) -> str:
+        """将行数据转为 Markdown 表格"""
+        lines = [f"## {sheet_name}\n"]
+
+        # 表头
+        header = rows[0]
+        header_cells = [str(cell) if cell is not None else "" for cell in header]
+        lines.append("| " + " | ".join(header_cells) + " |")
+        lines.append("| " + " | ".join(["---"] * len(header_cells)) + " |")
+
+        # 数据行
+        for row in rows[1:]:
+            cells = [str(cell) if cell is not None else "" for cell in row]
+            # 补齐列数
+            while len(cells) < len(header_cells):
+                cells.append("")
+            lines.append("| " + " | ".join(cells[:len(header_cells)]) + " |")
+
+        return "\n".join(lines)
+
+
+class CsvHandler(BaseFileHandler):
+    """CSV 文件处理：读取并转为 Markdown 表格"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        # 尝试检测编码
+        text = self._decode(file_stream)
+        reader = csv.reader(text.splitlines())
+        rows = list(reader)
+
+        if not rows:
+            content = "(CSV 文件为空)"
+        else:
+            content = self._rows_to_markdown(rows)
+
+        return [
+            ConvertedPage(
+                page_number=1,
+                total_pages=1,
+                content=content,
+                content_type="table_extracted",
+                source_file_type="csv",
+                metadata={"filename": filename},
+            )
+        ]
+
+    def _decode(self, file_stream: bytes) -> str:
+        """尝试多种编码解码"""
+        for encoding in ("utf-8", "utf-8-sig", "gbk", "gb2312", "latin-1"):
+            try:
+                return file_stream.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return file_stream.decode("utf-8", errors="replace")
+
+    def _rows_to_markdown(self, rows: list[list[str]]) -> str:
+        """将 CSV 行转为 Markdown 表格"""
+        lines = []
+        header = rows[0]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("| " + " | ".join(["---"] * len(header)) + " |")
+
+        for row in rows[1:]:
+            cells = row[:]
+            while len(cells) < len(header):
+                cells.append("")
+            lines.append("| " + " | ".join(cells[:len(header)]) + " |")
+
+        return "\n".join(lines)
+
+
+class TextHandler(BaseFileHandler):
+    """纯文本/Markdown 文件处理：直接读取内容"""
+
+    async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
+        # 尝试多种编码
+        for encoding in ("utf-8", "utf-8-sig", "gbk", "latin-1"):
+            try:
+                content = file_stream.decode(encoding)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            content = file_stream.decode("utf-8", errors="replace")
+
+        ext = Path(filename).suffix.lstrip(".").lower() if filename else "txt"
+
+        return [
+            ConvertedPage(
+                page_number=1,
+                total_pages=1,
+                content=content,
+                content_type="text_extracted",
+                source_file_type=ext,
+                metadata={"filename": filename},
+            )
+        ]
+
+
+# ============================================================
+# Handler 注册表
+# ============================================================
+
+HANDLER_REGISTRY: dict[str, type[BaseFileHandler]] = {
+    "docx": DocxHandler,
+    "doc": DocxHandler,
+    "pdf": PdfHandler,
+    "pptx": PptxHandler,
+    "ppt": PptxHandler,
+    "png": ImageHandler,
+    "jpg": ImageHandler,
+    "jpeg": ImageHandler,
+    "webp": ImageHandler,
+    "bmp": ImageHandler,
+    "xlsx": XlsxHandler,
+    "xls": XlsxHandler,
+    "csv": CsvHandler,
+    "txt": TextHandler,
+    "md": TextHandler,
+    "markdown": TextHandler,
+}
+
+
+# ============================================================
+# 主入口类
+# ============================================================
+
+
+class DocumentConverter:
+    """通用文档转换器
+
+    Usage:
+        converter = DocumentConverter()
+        pages = await converter.convert(file_bytes, "pptx", "presentation.pptx")
+    """
+
+    def get_supported_types(self) -> list[str]:
+        """获取所有支持的文件类型"""
+        return sorted(set(HANDLER_REGISTRY.keys()))
+
+    def is_supported(self, file_type: str) -> bool:
+        """判断文件类型是否受支持"""
+        return file_type.lower().strip(".") in HANDLER_REGISTRY
+
+    async def convert(
+        self,
+        file_stream: bytes,
+        file_type: str,
+        filename: str = "",
+    ) -> list[ConvertedPage]:
+        """将文件流转换为 ConvertedPage 列表
+
+        Args:
+            file_stream: 文件二进制流
+            file_type: 文件扩展名（如 "docx"/"pdf"/"pptx"，不含点号）
+            filename: 原始文件名（可选，用于日志和元数据）
+
+        Returns:
+            ConvertedPage 列表
+
+        Raises:
+            UnsupportedFileTypeError: 不支持的文件类型
+            ConversionError: 转换过程中的错误
+        """
+        normalized_type = file_type.lower().strip(".")
+
+        handler_cls = HANDLER_REGISTRY.get(normalized_type)
+        if not handler_cls:
+            raise UnsupportedFileTypeError(normalized_type)
+
+        logger.info(
+            f"[DocumentConverter] Converting: type={normalized_type}, "
+            f"filename={filename}, size={len(file_stream)} bytes"
+        )
+
+        handler = handler_cls()
+        pages = await handler.handle(file_stream, filename)
+
+        logger.info(
+            f"[DocumentConverter] Conversion complete: {len(pages)} pages extracted"
+        )
+        return pages
+
+    def pages_to_markdown(self, pages: list[ConvertedPage], separator: str = "\n\n---\n\n") -> str:
+        """将 ConvertedPage 列表拼接为完整 Markdown 文本
+
+        Args:
+            pages: ConvertedPage 列表
+            separator: 页间分隔符
+
+        Returns:
+            完整 Markdown 字符串
+        """
+        parts = []
+        for page in pages:
+            if page.total_pages > 1:
+                parts.append(f"# 第{page.page_number}页\n\n{page.content}")
+            else:
+                parts.append(page.content)
+        return separator.join(parts)
+
+
+# 模块级单例
+document_converter = DocumentConverter()
