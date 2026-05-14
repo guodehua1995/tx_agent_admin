@@ -13,6 +13,7 @@ from app.schemas.documents import (
     DocumentSubmitForReview,
     DocumentUpdate,
 )
+from app.services.chunk_service import chunk_service
 from app.services.document_pipeline import document_pipeline
 
 logger = logging.getLogger(__name__)
@@ -82,9 +83,12 @@ async def update_document(doc_in: DocumentUpdate):
 @router.delete("/delete", summary="删除文档")
 async def delete_document(document_id: int = Query(..., description="文档ID")):
     doc = await document_controller.get(id=document_id)
+    # 清理向量数据
+    await chunk_service.delete_by_doc_id(document_id)
+    # 软删除文档
     doc.is_deleted = True
     await doc.save()
-    logger.info("[Document] Soft deleted: id=%s", document_id)
+    logger.info("[Document] Soft deleted with vectors: id=%s", document_id)
     return Success(msg="删除成功")
 
 

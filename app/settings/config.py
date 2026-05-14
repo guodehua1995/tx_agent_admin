@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     FEISHU_STRUCTURED_FOLDER_TOKEN: str = ""
     FEISHU_VERIFY_SSL: bool = True
 
+    # Gotenberg 文档转换服务
+    GOTENBERG_URL: str = "http://localhost:3000"
+
     # LlamaIndex / RAG
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
     DEFAULT_EMBEDDING_DIMENSION: int = 1536

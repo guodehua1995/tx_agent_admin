@@ -112,4 +112,13 @@ export default {
   updateGlobalConfig: (data = {}) => request.post('/global_config/update', data),
   batchUpdateGlobalConfig: (data = {}) => request.post('/global_config/batch_update', data),
   deleteGlobalConfig: (params = {}) => request.delete('/global_config/delete', { params }),
+  // KB Content (知识库内容管理)
+  getKBContentList: (params = {}) => request.get('/kb_content/list', { params }),
+  createKBContentDoc: (data = {}) => request.post('/kb_content/create', data),
+  deleteKBContentDoc: (params = {}) => request.delete('/kb_content/delete', { params }),
+  // Doc Content (文档切片管理)
+  getDocChunkList: (params = {}) => request.get('/doc_content/list', { params }),
+  createDocChunk: (data = {}) => request.post('/doc_content/create', data),
+  updateDocChunk: (data = {}) => request.post('/doc_content/update', data),
+  deleteDocChunk: (params = {}) => request.delete('/doc_content/delete', { params }),
 }

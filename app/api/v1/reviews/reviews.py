@@ -25,9 +25,9 @@ async def list_review(
 ):
     q = Q()
     if status:
-        q &= Q(status=status)
+        q &= Q(status=status, is_deleted=False)
     else:
-        q &= Q(status=DocumentStatus.PENDING_REVIEW)
+        q &= Q(status=DocumentStatus.PENDING_REVIEW, is_deleted=False)
     total, objs = await document_controller.list(page=page, page_size=page_size, search=q, order=["-created_at"])
     data = [await obj.to_dict(exclude_fields=["content"]) for obj in objs]
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)

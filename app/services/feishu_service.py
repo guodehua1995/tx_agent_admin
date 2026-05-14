@@ -144,12 +144,66 @@ class FeishuService:
             (r"feishu\.cn/docx/([A-Za-z0-9]+)", "docx"),
             (r"feishu\.cn/wiki/([A-Za-z0-9]+)", "wiki"),
             (r"feishu\.cn/sheets/([A-Za-z0-9]+)", "sheet"),
+            (r"feishu\.cn/slides/([A-Za-z0-9]+)", "slide"),
+            (r"feishu\.cn/file/([A-Za-z0-9]+)", "file"),
         ]
         for pattern, doc_type in patterns:
             match = re.search(pattern, url)
             if match:
                 return match.group(1), doc_type
         raise ValueError(f"无法解析飞书文档URL: {url}")
+
+    async def download_file(self, file_token: str, access_token: str) -> tuple[bytes, str]:
+        """下载飞书云空间文件
+
+        Args:
+            file_token: 文件 token
+            access_token: 访问凭证
+
+        Returns:
+            (file_bytes, filename) 元组，filename 包含扩展名
+        """
+        url = f"{self._base_url}/drive/v1/files/{file_token}/download"
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=120) as client:
+            resp = await client.get(url, headers=headers, follow_redirects=True)
+            resp.raise_for_status()
+
+            # 从 Content-Disposition 提取文件名
+            filename = self._extract_filename_from_headers(resp.headers, file_token)
+            return resp.content, filename
+
+    def _extract_filename_from_headers(self, headers, fallback_token: str) -> str:
+        """从响应头 Content-Disposition 中提取文件名"""
+        content_disposition = headers.get("content-disposition", "")
+        if content_disposition:
+            # 尝试匹配 filename*=UTF-8''xxx 或 filename="xxx"
+            match = re.search(r"filename\*=UTF-8''(.+?)(?:;|$)", content_disposition)
+            if match:
+                from urllib.parse import unquote
+                return unquote(match.group(1))
+            match = re.search(r'filename="?([^";]+)"?', content_disposition)
+            if match:
+                return match.group(1)
+
+        # fallback: 用 content-type 推断扩展名
+        content_type = headers.get("content-type", "")
+        ext_map = {
+            "application/pdf": ".pdf",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+            "text/csv": ".csv",
+            "text/plain": ".txt",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+        }
+        for mime, ext in ext_map.items():
+            if mime in content_type:
+                return f"{fallback_token}{ext}"
+
+        return f"{fallback_token}.bin"
 
     async def get_user_info(self, open_id: str, access_token: str) -> dict:
         """获取飞书用户信息"""
