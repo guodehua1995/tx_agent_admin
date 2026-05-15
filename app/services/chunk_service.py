@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-import logging
 
 from tortoise import Tortoise
 
@@ -93,6 +92,36 @@ class ChunkService:
 
         await rag_service.delete_document(str(doc_id))
         logger.info(f"All chunks deleted for doc_id={doc_id}")
+
+    async def get_adjacent_chunks(
+        self, node_id: str, doc_id: str, window: int = 1,
+    ) -> list[dict]:
+        """获取同文档中指定 chunk 前后 ±window 个相邻 chunk
+
+        利用同文档 chunk 按 id 排序的行号(rn)定位目标 chunk，
+        然后取 rn ± window 范围内的其他 chunk 返回。
+        """
+        if window <= 0:
+            return []
+        conn = await self._get_connection()
+        sql = f"""
+            WITH doc_chunks AS (
+                SELECT node_id, text, metadata_,
+                       ROW_NUMBER() OVER (ORDER BY id) AS rn
+                FROM {self._table_name}
+                WHERE metadata_->>'doc_id' = $1
+            ),
+            target AS (
+                SELECT rn FROM doc_chunks WHERE node_id = $2
+            )
+            SELECT dc.node_id, dc.text, dc.metadata_
+            FROM doc_chunks dc, target t
+            WHERE dc.rn BETWEEN t.rn - $3 AND t.rn + $3
+              AND dc.node_id != $2
+            ORDER BY dc.rn
+        """
+        _, results = await conn.execute_query(sql, [doc_id, node_id, window])
+        return [dict(row) for row in results]
 
 
 chunk_service = ChunkService()

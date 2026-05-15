@@ -14,6 +14,7 @@ class KnowledgeBaseCreate(BaseModel):
     chunk_overlap: int = Field(50, description="分块重叠")
     similarity_top_k: int = Field(5, description="检索返回数量")
     similarity_threshold: float = Field(0.5, description="相似度阈值")
+    context_chunks_window: int = Field(0, description="上下文扩展窗口(前后各N个chunk)")
 
 
 class KnowledgeBaseUpdate(BaseModel):
@@ -28,3 +29,4 @@ class KnowledgeBaseUpdate(BaseModel):
     chunk_overlap: Optional[int] = None
     similarity_top_k: Optional[int] = None
     similarity_threshold: Optional[float] = None
+    context_chunks_window: Optional[int] = None

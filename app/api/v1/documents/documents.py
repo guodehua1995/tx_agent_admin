@@ -85,6 +85,8 @@ async def delete_document(document_id: int = Query(..., description="文档ID"))
     doc = await document_controller.get(id=document_id)
     # 清理向量数据
     await chunk_service.delete_by_doc_id(document_id)
+    # 清理页面记录及截图
+    await _cleanup_doc_pages(document_id)
     # 软删除文档
     doc.is_deleted = True
     await doc.save()
@@ -126,3 +128,24 @@ async def list_document_type():
         for code in DocumentTypeCode
     ]
     return Success(data=data)
+
+
+# ========== 内部辅助 ==========
+
+
+async def _cleanup_doc_pages(document_id: int):
+    """删除文档关联的 DocumentPage 记录及截图文件"""
+    from app.models.rag import DocumentPage
+    from app.services.file_storage import file_storage
+
+    pages = await DocumentPage.filter(document_id=document_id).all()
+    for page in pages:
+        if page.screenshot_url:
+            # screenshot_url 格式: /media/pages/doc_X/page_Y.png → 取相对路径
+            rel_path = page.screenshot_url.lstrip("/").removeprefix("media/")
+            if rel_path.startswith(file_storage.url_prefix.lstrip("/")):
+                rel_path = page.screenshot_url[len(file_storage.url_prefix) + 1:]
+            await file_storage.delete(rel_path)
+    deleted_count = await DocumentPage.filter(document_id=document_id).delete()
+    if deleted_count:
+        logger.info("[Document] Cleaned up %d page records for doc_id=%s", deleted_count, document_id)

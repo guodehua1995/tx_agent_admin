@@ -42,6 +42,7 @@ class KnowledgeBase(BaseModel, TimestampMixin):
     chunk_overlap = fields.IntField(default=50, description="分块重叠(token)")
     similarity_top_k = fields.IntField(default=5, description="检索返回数量")
     similarity_threshold = fields.FloatField(default=0.5, description="相似度阈值")
+    context_chunks_window = fields.IntField(default=0, description="上下文扩展窗口(前后各N个chunk)")
     is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
 
     class Meta:
@@ -154,3 +155,15 @@ class ChatMessage(BaseModel, TimestampMixin):
 
     class Meta:
         table = "chat_message"
+
+
+class DocumentPage(BaseModel, TimestampMixin):
+    document_id = fields.IntField(description="文档ID -> document.id", index=True)
+    page_number = fields.IntField(description="页码(从1开始)")
+    total_pages = fields.IntField(description="总页数")
+    content = fields.TextField(null=True, description="该页Markdown内容")
+    screenshot_url = fields.CharField(max_length=1000, null=True, description="截图访问URL")
+
+    class Meta:
+        table = "document_page"
+        unique_together = (("document_id", "page_number"),)

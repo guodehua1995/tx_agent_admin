@@ -38,6 +38,7 @@ class ConvertedPage:
     content_type: str  # "text_extracted" | "vision_extracted" | "table_extracted"
     source_file_type: str  # 原始文件扩展名: "docx"/"pdf"/"pptx" 等
     metadata: dict = field(default_factory=dict)  # 可扩展元数据
+    image_bytes: bytes | None = None  # 原始页面 PNG 字节（仅 vision 类 handler 有值）
 
 
 # ============================================================
@@ -63,8 +64,8 @@ class ConversionError(Exception):
 # ============================================================
 
 
-# 单页图片理解 System Prompt
-VISION_SYSTEM_PROMPT = """你是一个专业的文档内容解析专家。你的任务是分析文档页面的截图，将其内容转换为结构化的Markdown格式。
+# 文档类 System Prompt（PDF、图片等以文本内容为主的场景）
+DOCUMENT_VISION_PROMPT = """你是一个专业的文档内容解析专家。你的任务是分析文档页面的截图，将其内容转换为结构化的Markdown格式。
 
 要求：
 1. 准确识别页面中的所有文本内容（标题、正文、列表项等）
@@ -80,14 +81,38 @@ VISION_SYSTEM_PROMPT = """你是一个专业的文档内容解析专家。你的
 - 确保Markdown语法正确
 - 不要输出"这一页包含..."之类的描述性文字，直接输出内容"""
 
+# PPT 演示文稿 System Prompt（以视觉理解和内容提炼为主）
+PPT_VISION_PROMPT = """你是一个专业的演示文稿内容分析专家。你的任务是理解PPT幻灯片页面截图的核心表达意图，提炼并总结其关键信息。
 
-async def _call_vision_llm(image_bytes: bytes, page_num: int, context: str = "文档") -> str:
+PPT页面通常包含标题、要点、图表、示意图、流程图等视觉元素，你需要：
+1. 提取该页的主题/标题
+2. 总结页面传达的核心观点和关键信息
+3. 对图表、流程图、架构图等视觉元素进行含义解读，而非简单描述外观
+4. 如果有数据图表，提取关键数据趋势和结论
+5. 如果有表格，用Markdown表格格式输出关键数据
+6. 忽略纯装饰性设计元素（背景、配色、Logo水印等）
+
+输出要求：
+- 以该页标题作为Markdown标题（## 级别）
+- 用简洁的要点列表总结核心内容
+- 对视觉元素给出含义解读而非外观描述
+- 确保Markdown语法正确
+- 不要输出"这一页包含..."之类的描述性前缀，直接输出结构化内容"""
+
+
+async def _call_vision_llm(
+    image_bytes: bytes,
+    page_num: int,
+    context: str = "文档",
+    system_prompt: str | None = None,
+) -> str:
     """调用多模态 LLM 理解图片内容
 
     Args:
         image_bytes: PNG 图片字节
         page_num: 页码
         context: 上下文描述（如"PPT"/"PDF"）
+        system_prompt: 自定义系统提示词，默认使用 DOCUMENT_VISION_PROMPT
 
     Returns:
         LLM 返回的 Markdown 文本
@@ -117,8 +142,10 @@ async def _call_vision_llm(image_bytes: bytes, page_num: int, context: str = "�
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     image_url = f"data:image/png;base64,{image_b64}"
 
+    prompt = system_prompt or DOCUMENT_VISION_PROMPT
+
     messages = [
-        ChatMessage(role="system", content=VISION_SYSTEM_PROMPT),
+        ChatMessage(role="system", content=prompt),
         ChatMessage(
             role="user",
             blocks=[
@@ -307,7 +334,9 @@ class PptxHandler(BaseFileHandler):
         for i, img_bytes in enumerate(page_images, start=1):
             logger.info(f"[PptxHandler] Processing page {i}/{total}")
             try:
-                page_md = await _call_vision_llm(img_bytes, i, context="PPT")
+                page_md = await _call_vision_llm(
+                    img_bytes, i, context="PPT", system_prompt=PPT_VISION_PROMPT
+                )
                 pages.append(
                     ConvertedPage(
                         page_number=i,
@@ -316,6 +345,7 @@ class PptxHandler(BaseFileHandler):
                         content_type="vision_extracted",
                         source_file_type="pptx",
                         metadata={"filename": filename},
+                        image_bytes=img_bytes,
                     )
                 )
             except Exception as e:
@@ -328,6 +358,7 @@ class PptxHandler(BaseFileHandler):
                         content_type="vision_extracted",
                         source_file_type="pptx",
                         metadata={"filename": filename, "error": str(e)},
+                        image_bytes=img_bytes,
                     )
                 )
         return pages

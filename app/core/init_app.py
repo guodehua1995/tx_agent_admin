@@ -360,3 +360,6 @@ async def init_data():
     await init_roles()
     await init_vector_store()
     await init_feishu_ws_clients()
+    # 确保 media 存储目录存在
+    from pathlib import Path
+    Path(settings.MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
