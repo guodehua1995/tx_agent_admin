@@ -10,6 +10,7 @@ from .base import base_router
 from .dashboard import dashboard_router
 from .depts import depts_router
 from .doc_content import router as doc_content_router
+from .doc_pages import router as doc_pages_router
 from .doc_templates import doc_templates_router
 from .documents import documents_router
 from .feishu import feishu_router, webhook_router
@@ -43,6 +44,7 @@ v1_router.include_router(dashboard_router, prefix="/dashboard", dependencies=[De
 v1_router.include_router(global_config_router, prefix="/global_config", dependencies=[DependPermission])
 v1_router.include_router(kb_content_router, prefix="/kb_content", dependencies=[DependPermission])
 v1_router.include_router(doc_content_router, prefix="/doc_content", dependencies=[DependPermission])
+v1_router.include_router(doc_pages_router, prefix="/doc_page", dependencies=[DependPermission])
 
 # 飞书 Webhook（无认证）
 v1_router.include_router(webhook_router, prefix="/feishu")

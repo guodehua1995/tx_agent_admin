@@ -13,6 +13,7 @@ from app.models.rag import (
     Agent,
     ChatMessage,
     Document,
+    DocumentPage,
     KnowledgeBase,
     LLMProviderConfig,
     StructuredResult,
@@ -124,6 +125,10 @@ class DocumentPipeline:
 
         # 调用文档转换器
         pages = await document_converter.convert(file_bytes, ext, filename)
+
+        # 保存页面截图和页记录（若有 image_bytes）
+        await self._save_page_records(doc, pages)
+
         markdown_content = document_converter.pages_to_markdown(pages)
 
         # 更新元数据
@@ -152,6 +157,7 @@ class DocumentPipeline:
                 file_bytes = f.read()
             filename = Path(file_path).name
             pages = await document_converter.convert(file_bytes, ext, filename)
+            await self._save_page_records(doc, pages)
             markdown_content = document_converter.pages_to_markdown(pages)
             doc.source_meta = {**meta, "file_type": ext, "page_count": len(pages)}
             return markdown_content
@@ -159,6 +165,30 @@ class DocumentPipeline:
         # 其他类型尝试作为纯文本读取
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
+
+    async def _save_page_records(self, doc: Document, pages):
+        """保存页面截图并创建 DocumentPage 记录"""
+        from app.services.file_storage import file_storage
+
+        has_images = any(getattr(p, "image_bytes", None) for p in pages)
+        if not has_images and len(pages) <= 1:
+            return
+
+        for page in pages:
+            screenshot_url = None
+            if page.image_bytes:
+                path = f"pages/doc_{doc.id}/page_{page.page_number}.png"
+                screenshot_url = await file_storage.save(path, page.image_bytes)
+
+            await DocumentPage.create(
+                document_id=doc.id,
+                page_number=page.page_number,
+                total_pages=page.total_pages,
+                content=page.content,
+                screenshot_url=screenshot_url,
+            )
+
+        logger.info(f"Page records saved: doc_id={doc.id}, pages={len(pages)}")
 
     async def _fetch_web_content(self, doc: Document) -> str:
         """抓取网页内容"""
@@ -272,6 +302,7 @@ class DocumentPipeline:
                 "source_path": source_path,
                 "page_number": i,
                 "total_pages": len(pages),
+                "doc_type_code": doc.doc_type_code,
             }
             llama_docs.append(
                 LlamaDocument(

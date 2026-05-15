@@ -37,6 +37,15 @@ def create_app() -> FastAPI:
     )
     register_exceptions(app)
     register_routers(app, prefix="/api")
+
+    # 挂载静态文件目录，提供 /media/ 下的文件 HTTP 访问
+    from pathlib import Path
+    from starlette.staticfiles import StaticFiles
+
+    media_dir = Path(settings.MEDIA_ROOT)
+    media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(settings.MEDIA_URL_PREFIX, StaticFiles(directory=str(media_dir)), name="media")
+
     return app
 
 

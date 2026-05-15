@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -21,7 +20,10 @@ from app.services.llm_builder import build_embed_model
 
 from .base import BaseToolProvider, adapt_to_langchain, adapt_to_llamaindex
 
-METADATA_KEEP_KEYS = ["doc_id"]
+METADATA_KEEP_KEYS = [
+    "doc_id", "page_number", "doc_type_code",
+    "screenshot_url", "is_context_expansion",
+]
 
 
 # ── LangChain 参数 Schema ────────────────────────────────────────
@@ -34,30 +36,47 @@ class KdVectorQueryArgs(BaseModel):
 
 # ── 核心业务逻辑（与框架无关）─────────────────────────────────────
 
-def _make_kd_query_fn(retriever, kb_name: str, threshold: float):
+def _make_kd_query_fn(retriever, kb_name: str, threshold: float, context_chunks_window: int = 0):
     """工厂函数：生成知识库向量查询工具的核心异步函数"""
 
     async def kd_vector_query(query: str, metadata_filters: Optional[dict] = None) -> str:
         """在知识库中执行向量检索，返回匹配文档片段的 JSON 字符串"""
         from llama_index.core.indices.query.schema import QueryBundle
-        from app.services.rag_node_processors import MetadataFilterPostProcessor
+        from app.services.rag_node_processors import (
+            ContextExpansionPostProcessor,
+            MetadataFilterPostProcessor,
+        )
 
         try:
             nodes = await retriever.aretrieve(query)
-            processor = MetadataFilterPostProcessor(METADATA_KEEP_KEYS)
-            nodes = processor.postprocess_nodes(nodes, query_bundle=QueryBundle(query))
+            query_bundle = QueryBundle(query)
 
-            results = []
+            # 1. 上下文扩展（PPT 邻页 + chunk 窗口），需在 metadata 过滤之前执行
+            expansion = ContextExpansionPostProcessor(context_chunks_window)
+            nodes = await expansion.apostprocess_nodes(nodes, query_bundle=query_bundle)
+
+            # 2. 按阈值过滤原始召回节点（扩展节点跳过阈值检查）
+            filtered = []
             for node in nodes:
                 score = getattr(node, "score", None)
-                if score and score >= threshold:
-                    node_obj = node.node if hasattr(node, "node") else node
-                    node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
-                    results.append({
-                        "score": round(score, 4),
-                        "text": node_text,
-                        "metadata": node_obj.metadata,
-                    })
+                is_expansion = node.node.metadata.get("is_context_expansion", False)
+                if is_expansion or (score and score >= threshold):
+                    filtered.append(node)
+
+            # 3. metadata 过滤，只保留必要字段
+            processor = MetadataFilterPostProcessor(METADATA_KEEP_KEYS)
+            filtered = processor.postprocess_nodes(filtered, query_bundle=query_bundle)
+
+            results = []
+            for node in filtered:
+                node_obj = node.node if hasattr(node, "node") else node
+                node_text = node_obj.text if hasattr(node_obj, "text") else str(node_obj)
+                score = getattr(node, "score", None)
+                results.append({
+                    "score": round(score, 4) if score else 0.0,
+                    "text": node_text,
+                    "metadata": node_obj.metadata,
+                })
             return json.dumps(results, ensure_ascii=False) if results else "[]"
         except Exception as e:
             logger.error("[KdVectorQuery] Error in %s: %s", kb_name, e)
@@ -113,7 +132,7 @@ class KdVectorQueryToolProvider(BaseToolProvider):
         tools = []
         for kb in knowledge_bases:
             retriever = await self._build_retriever(kb, kwargs.get("chat_model_config"))
-            fn = _make_kd_query_fn(retriever, kb.name, kb.similarity_threshold)
+            fn = _make_kd_query_fn(retriever, kb.name, kb.similarity_threshold, kb.context_chunks_window)
             name, desc = self._build_tool_meta(kb)
             tools.append(adapt_to_llamaindex(fn, name, desc))
             logger.debug("[KdVectorQuery] Built llamaindex tool: %s for kb=%s", name, kb.name)
@@ -123,7 +142,7 @@ class KdVectorQueryToolProvider(BaseToolProvider):
         tools = []
         for kb in knowledge_bases:
             retriever = await self._build_retriever(kb, kwargs.get("chat_model_config"))
-            fn = _make_kd_query_fn(retriever, kb.name, kb.similarity_threshold)
+            fn = _make_kd_query_fn(retriever, kb.name, kb.similarity_threshold, kb.context_chunks_window)
             name, desc = self._build_tool_meta(kb)
             tools.append(adapt_to_langchain(fn, name, desc, args_schema=KdVectorQueryArgs))
             logger.debug("[KdVectorQuery] Built langchain tool: %s for kb=%s", name, kb.name)

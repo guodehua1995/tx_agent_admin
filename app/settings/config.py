@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # Gotenberg 文档转换服务
     GOTENBERG_URL: str = "http://localhost:3000"
 
+    # 文件存储
+    FILE_STORAGE_BACKEND: str = "local"
+    MEDIA_ROOT: str = os.path.join(BASE_DIR, "media")
+    MEDIA_URL_PREFIX: str = "/media"
+
     # LlamaIndex / RAG
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
     DEFAULT_EMBEDDING_DIMENSION: int = 1536

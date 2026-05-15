@@ -54,9 +54,13 @@ async def create_kb_document(doc_in: DocumentCreate, background_tasks: Backgroun
 
 @router.delete("/delete", summary="删除文档并清理向量")
 async def delete_kb_document(document_id: int = Query(..., description="文档ID")):
+    from app.api.v1.documents.documents import _cleanup_doc_pages
+
     doc = await document_controller.get(id=document_id)
     # 清理向量
     await chunk_service.delete_by_doc_id(document_id)
+    # 清理页面记录及截图
+    await _cleanup_doc_pages(document_id)
     # 软删除文档
     doc.is_deleted = True
     await doc.save()
