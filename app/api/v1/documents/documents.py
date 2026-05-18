@@ -53,7 +53,14 @@ async def list_document(
 @router.get("/get", summary="文档详情")
 async def get_document(document_id: int = Query(..., description="文档ID")):
     obj = await document_controller.get(id=document_id)
-    return Success(data=await obj.to_dict())
+    data = await obj.to_dict()
+    # 附加分页摘要（分页文档使用）
+    from app.models.rag import DocumentPage
+    pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values(
+        "id", "page_number", "total_pages", "screenshot_url"
+    )
+    data["pages"] = list(pages)
+    return Success(data=data)
 
 
 @router.post("/create", summary="创建文档")

@@ -2,11 +2,13 @@
 import { computed, h, nextTick, onMounted, ref, resolveDirective, withDirectives } from 'vue'
 import {
   NButton,
+  NCard,
   NDrawer,
   NDrawerContent,
   NEmpty,
   NForm,
   NFormItem,
+  NImage,
   NInput,
   NPopconfirm,
   NSelect,
@@ -47,6 +49,17 @@ const contentSaving = ref(false)
 const vditorContainer = ref(null)
 const previewContainer = ref(null)
 let vditorInstance = null
+
+// 分页文档状态
+const isPagedDoc = computed(() => contentDoc.value?.pages?.length > 0)
+const pageList = computed(() => contentDoc.value?.pages || [])
+const currentPageIndex = ref(0)
+const currentPageDetail = ref(null)
+const currentPageContent = ref('')
+const pageSaving = ref(false)
+const pageVditorContainer = ref(null)
+const pagePreviewContainer = ref(null)
+let pageVditorInstance = null
 
 // 判断是否为飞书文档
 const isFeishuDoc = computed(() => contentDoc.value?.source_type === 'feishu_doc')
@@ -115,23 +128,26 @@ async function openContentDrawer(row) {
   contentLoading.value = true
   contentDoc.value = null
   contentText.value = ''
+  currentPageDetail.value = null
+  currentPageContent.value = ''
+  currentPageIndex.value = 0
   // 销毁之前的 vditor 实例
-  if (vditorInstance) {
-    vditorInstance.destroy()
-    vditorInstance = null
-  }
+  destroyVditors()
   try {
     const res = await api.getDocument({ document_id: row.id })
     contentDoc.value = res.data
     contentText.value = res.data?.content || ''
-    // 如果是飞书文档且可编辑，初始化 vditor
-    if (isFeishuDoc.value && isContentEditable.value) {
+
+    // 分页文档：加载第一页详情
+    if (isPagedDoc.value) {
+      await loadPageDetail(0)
+    } else if (isFeishuDoc.value && isContentEditable.value) {
+      // 飞书文档且可编辑，初始化 vditor
       nextTick(() => {
         initVditor()
       })
-    }
-    // 如果是飞书文档但不可编辑，渲染预览
-    if (isFeishuDoc.value && !isContentEditable.value && contentText.value) {
+    } else if (isFeishuDoc.value && !isContentEditable.value && contentText.value) {
+      // 飞书文档只读预览
       nextTick(() => {
         if (previewContainer.value) {
           Vditor.preview(previewContainer.value, contentText.value, {
@@ -146,6 +162,96 @@ async function openContentDrawer(row) {
     contentDrawerVisible.value = false
   } finally {
     contentLoading.value = false
+  }
+}
+
+function destroyVditors() {
+  if (vditorInstance) {
+    vditorInstance.destroy()
+    vditorInstance = null
+  }
+  if (pageVditorInstance) {
+    pageVditorInstance.destroy()
+    pageVditorInstance = null
+  }
+}
+
+async function loadPageDetail(index) {
+  const page = pageList.value[index]
+  if (!page) return
+  currentPageIndex.value = index
+  // 销毁之前的页面 vditor
+  if (pageVditorInstance) {
+    pageVditorInstance.destroy()
+    pageVditorInstance = null
+  }
+  try {
+    const res = await api.getDocPageDetail({ doc_id: contentDoc.value.id, page_number: page.page_number })
+    currentPageDetail.value = res.data
+    currentPageContent.value = res.data?.content || ''
+    // 如果可编辑，初始化页面 vditor
+    if (isContentEditable.value) {
+      nextTick(() => {
+        initPageVditor()
+      })
+    } else if (currentPageContent.value) {
+      nextTick(() => {
+        if (pagePreviewContainer.value) {
+          Vditor.preview(pagePreviewContainer.value, currentPageContent.value, {
+            mode: 'light',
+            theme: { current: 'light' },
+          })
+        }
+      })
+    }
+  } catch {
+    $message?.error('获取页面详情失败')
+  }
+}
+
+function initPageVditor() {
+  if (!pageVditorContainer.value) return
+  pageVditorInstance = new Vditor(pageVditorContainer.value, {
+    height: 400,
+    mode: 'ir',
+    value: currentPageContent.value,
+    placeholder: '请输入 Markdown 内容...',
+    toolbar: [
+      'headings', 'bold', 'italic', 'strike', '|',
+      'line', 'quote', 'list', 'ordered-list', 'check', '|',
+      'code', 'inline-code', '|',
+      'undo', 'redo', '|', 'fullscreen', 'preview', 'help',
+    ],
+    toolbarConfig: { pin: true },
+    cache: { enable: false },
+    after: () => {},
+    input: (value) => {
+      currentPageContent.value = value
+    },
+  })
+}
+
+async function handleSavePageContent() {
+  if (!contentDoc.value || !currentPageDetail.value) return
+  if (pageVditorInstance) {
+    currentPageContent.value = pageVditorInstance.getValue()
+  }
+  pageSaving.value = true
+  try {
+    const res = await api.updateDocPageContent({
+      document_id: contentDoc.value.id,
+      page_number: currentPageDetail.value.page_number,
+      content: currentPageContent.value,
+    })
+    if (res.code === 0) {
+      $message?.success(`第 ${currentPageDetail.value.page_number} 页内容已保存`)
+    } else {
+      $message?.error(res.msg || '保存失败')
+    }
+  } catch {
+    $message?.error('保存失败')
+  } finally {
+    pageSaving.value = false
   }
 }
 
@@ -567,7 +673,7 @@ const columns = [
     </CrudModal>
 
     <!-- Content View/Edit Drawer -->
-    <NDrawer v-model:show="contentDrawerVisible" placement="right" :width="800">
+    <NDrawer v-model:show="contentDrawerVisible" placement="right" :width="900">
       <NDrawerContent :title="contentDoc ? `文档内容 - ${contentDoc.title}` : '文档内容'">
         <NSpin :show="contentLoading">
           <template v-if="contentDoc">
@@ -579,14 +685,70 @@ const columns = [
                 }}
               </NTag>
               <NTag v-if="isFeishuDoc" type="info" size="small">飞书文档</NTag>
+              <NTag v-if="isPagedDoc" type="info" size="small">分页文档</NTag>
               <span v-if="isContentEditable" style="color: #f0a020; font-size: 13px"
-                >可编辑 - 保存后将重新提交审核</span
+                >可编辑</span
               >
               <span v-else style="color: #999; font-size: 13px">只读</span>
             </div>
 
+            <!-- 分页文档浏览模式 -->
+            <template v-if="isPagedDoc">
+              <div style="display: flex; gap: 16px">
+                <!-- 左侧：页面缩略图列表 -->
+                <div style="width: 140px; flex-shrink: 0; max-height: 600px; overflow-y: auto">
+                  <div
+                    v-for="(page, idx) in pageList"
+                    :key="page.page_number"
+                    :style="{
+                      border: idx === currentPageIndex ? '2px solid #18a058' : '1px solid #e0e0e0',
+                      borderRadius: '6px',
+                      padding: '6px',
+                      marginBottom: '8px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      background: idx === currentPageIndex ? '#f0faf4' : '#fff',
+                    }"
+                    @click="loadPageDetail(idx)"
+                  >
+                    <NImage
+                      v-if="page.screenshot_url"
+                      :src="page.screenshot_url"
+                      :img-props="{ style: 'width: 120px; border-radius: 4px' }"
+                      preview-disabled
+                    />
+                    <div v-else style="width: 120px; height: 68px; background: #f5f5f5; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 12px">
+                      无截图
+                    </div>
+                    <div style="font-size: 12px; margin-top: 4px; color: #666">第 {{ page.page_number }} 页</div>
+                  </div>
+                </div>
+
+                <!-- 右侧：当前页内容 -->
+                <div style="flex: 1; min-width: 0">
+                  <!-- 当前页截图 -->
+                  <NCard v-if="currentPageDetail?.screenshot_url" size="small" title="页面截图" style="margin-bottom: 12px">
+                    <NImage
+                      :src="currentPageDetail.screenshot_url"
+                      :img-props="{ style: 'max-width: 100%; border-radius: 4px' }"
+                    />
+                  </NCard>
+                  <!-- 当前页内容编辑/预览 -->
+                  <NCard size="small" title="页面内容">
+                    <template v-if="isContentEditable">
+                      <div ref="pageVditorContainer" style="min-height: 300px" />
+                    </template>
+                    <template v-else>
+                      <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" />
+                      <NEmpty v-else description="暂无页面内容" />
+                    </template>
+                  </NCard>
+                </div>
+              </div>
+            </template>
+
             <!-- 飞书文档使用 Vditor 编辑器 -->
-            <template v-if="isFeishuDoc">
+            <template v-else-if="isFeishuDoc">
               <!-- 编辑模式：所见即所得 -->
               <div v-if="isContentEditable" ref="vditorContainer" style="min-height: 500px" />
               <!-- 预览模式 -->
@@ -610,16 +772,30 @@ const columns = [
           </template>
         </NSpin>
         <template #footer>
-          <NButton
-            v-if="isContentEditable"
-            v-permission="'post/api/v1/document/update_content'"
-            type="primary"
-            :loading="contentSaving"
-            :disabled="!contentText.trim()"
-            @click="handleSaveContent"
-          >
-            保存并提审
-          </NButton>
+          <!-- 分页文档保存按钮 -->
+          <template v-if="isPagedDoc && isContentEditable">
+            <NButton
+              v-permission="'post/api/v1/doc_pages/update_content'"
+              type="primary"
+              :loading="pageSaving"
+              :disabled="!currentPageContent.trim()"
+              @click="handleSavePageContent"
+            >
+              保存当前页
+            </NButton>
+          </template>
+          <!-- 非分页文档保存按钮 -->
+          <template v-else-if="isContentEditable">
+            <NButton
+              v-permission="'post/api/v1/document/update_content'"
+              type="primary"
+              :loading="contentSaving"
+              :disabled="!contentText.trim()"
+              @click="handleSaveContent"
+            >
+              保存并提审
+            </NButton>
+          </template>
         </template>
       </NDrawerContent>
     </NDrawer>

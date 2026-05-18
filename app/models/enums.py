@@ -41,6 +41,16 @@ class DocumentTypeCode(StrEnum):
             cls.PPT: "PPT文档",
         }
 
+    @classmethod
+    def get_paged_types(cls) -> set[str]:
+        """返回需要分页处理的文档类型集合"""
+        return {cls.PPT}
+
+    @classmethod
+    def is_paged_type(cls, code: str) -> bool:
+        """判断指定文档类型编码是否为分页类型"""
+        return code in cls.get_paged_types()
+
 
 class DocumentStatus(StrEnum):
     PENDING_FETCH = "pending_fetch"

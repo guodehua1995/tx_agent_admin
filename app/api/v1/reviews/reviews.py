@@ -7,7 +7,7 @@ from app.controllers.document import document_controller
 from app.controllers.review import review_controller
 from app.core.ctx import CTX_USER_ID
 from app.models.enums import DocumentStatus, ReviewAction
-from app.models.rag import StructuredResult
+from app.models.rag import DocumentPage, StructuredResult
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.reviews import ReviewSubmit
 from app.services.document_pipeline import document_pipeline
@@ -44,6 +44,10 @@ async def get_review_detail(document_id: int = Query(..., description="文档ID"
     reviews = await review_controller.get_by_document(document_id)
     doc_dict["review_history"] = [await r.to_dict() for r in reviews]
 
+    # 附加分页数据（含内容和截图）
+    pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values()
+    doc_dict["pages"] = list(pages)
+
     return Success(data=doc_dict)
 
 
@@ -72,6 +76,14 @@ async def approve_document(
             "edited_content": review_in.edited_content,
         }
     )
+
+    # 如果有按页编辑内容，写入 DocumentPage.content
+    if review_in.page_edits:
+        for edit in review_in.page_edits:
+            await DocumentPage.filter(
+                document_id=review_in.document_id,
+                page_number=edit.page_number,
+            ).update(content=edit.content)
 
     doc.status = DocumentStatus.APPROVED
     await doc.save()

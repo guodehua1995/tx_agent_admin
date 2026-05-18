@@ -121,4 +121,8 @@ export default {
   createDocChunk: (data = {}) => request.post('/doc_content/create', data),
   updateDocChunk: (data = {}) => request.post('/doc_content/update', data),
   deleteDocChunk: (params = {}) => request.delete('/doc_content/delete', { params }),
+  // Doc Pages (文档分页管理)
+  getDocPages: (params = {}) => request.get('/doc_pages/list', { params }),
+  getDocPageDetail: (params = {}) => request.get('/doc_pages/detail', { params }),
+  updateDocPageContent: (data = {}) => request.post('/doc_pages/update_content', data),
 }
