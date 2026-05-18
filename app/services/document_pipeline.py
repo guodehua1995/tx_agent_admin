@@ -1,4 +1,3 @@
-import re
 import time
 from pathlib import Path
 
@@ -159,7 +158,9 @@ class DocumentPipeline:
             pages = await document_converter.convert(file_bytes, ext, filename)
             await self._save_page_records(doc, pages)
             markdown_content = document_converter.pages_to_markdown(pages)
-            doc.source_meta = {**meta, "file_type": ext, "page_count": len(pages)}
+           
+            doc_token, doc_type = feishu_service.parse_feishu_url(file_path)
+            doc.source_meta = {**meta,"feishu_doc_token": doc_token, "feishu_doc_type": doc_type, "file_type": ext, "page_count": len(pages)}
             return markdown_content
 
         # 其他类型尝试作为纯文本读取
@@ -225,34 +226,28 @@ class DocumentPipeline:
 
     async def vectorize_document(self, doc_id: int):
         """审核通过后: 确定最终内容 → LlamaIndex 入库"""
-        from llama_index.core.ingestion import IngestionPipeline
-        from llama_index.core.node_parser import MarkdownNodeParser
-        from llama_index.core.schema import Document as LlamaDocument
-
         doc = await Document.get(id=doc_id)
         logger.info(f"Vectorizing document: id={doc_id}, name={doc.title}")
         try:
             doc.status = DocumentStatus.VECTORIZING
             await doc.save()
 
-            # 确定最终内容: 审核编辑 > 结构化 > 原始
-            final_content = doc.content
-            reviews = await review_controller.get_by_document(doc_id)
-            if reviews and reviews[0].edited_content:
-                final_content = reviews[0].edited_content
-            else:
-                structured = await StructuredResult.filter(document_id=doc_id).first()
-                if structured:
-                    final_content = structured.structured_content
-
             kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
-            meta = doc.source_meta or {}
-            page_count = meta.get("page_count", 0)
 
-            # 多页文档（PPT/PDF等）按页拆分入库
-            if page_count and page_count > 1:
-                await self._vectorize_paged_document(doc, final_content, kb)
+            # 分页类型文档：从 DocumentPage 表逐页读取内容向量化
+            if DocumentTypeCode.is_paged_type(doc.doc_type_code):
+                await self._vectorize_from_pages(doc, kb)
             else:
+                # 非分页文档：走原有逻辑（审核编辑 > 结构化 > 原始）
+                final_content = doc.content
+                reviews = await review_controller.get_by_document(doc_id)
+                if reviews and reviews[0].edited_content:
+                    final_content = reviews[0].edited_content
+                else:
+                    structured = await StructuredResult.filter(document_id=doc_id).first()
+                    if structured:
+                        final_content = structured.structured_content
+
                 metadata = {"title": doc.title, "source_type": doc.source_type}
                 await rag_service.ingest_document(
                     doc_id=str(doc.id),
@@ -271,46 +266,48 @@ class DocumentPipeline:
             await doc.save()
             logger.exception(f"Document vectorization failed: id={doc_id}")
 
-    async def _vectorize_paged_document(self, doc: Document, final_content: str, kb: KnowledgeBase):
-        """多页文档向量化: 按页拆分为独立文档入库"""
+    async def _vectorize_from_pages(self, doc: Document, kb: KnowledgeBase):
+        """从 DocumentPage 表读取每页内容进行向量化（优先使用编辑后内容）"""
         from llama_index.core.ingestion import IngestionPipeline
         from llama_index.core.node_parser import MarkdownNodeParser
         from llama_index.core.schema import Document as LlamaDocument
+
+        pages = await DocumentPage.filter(document_id=doc.id).order_by("page_number").all()
+        if not pages:
+            raise ValueError("分页文档没有页面记录")
 
         embedding_config = await LLMProviderConfig.get(id=kb.embedding_model_id)
         from app.services.llm_builder import build_embed_model
         embed_model = build_embed_model(embedding_config)
 
-        # 按一级标题 "# 第X页" 分割页面
-        pages = re.split(r"(?=^# 第\d+页)", final_content, flags=re.MULTILINE)
-        pages = [p.strip() for p in pages if p.strip()]
-
-        if not pages:
-            raise ValueError("文档解析后没有有效页面内容")
-
         meta = doc.source_meta or {}
-        source_path = meta.get("feishu_url", meta.get("file_path", meta.get("filename", "")))
-
         llama_docs = []
-        for i, page_text in enumerate(pages, start=1):
+        for page in pages:
+            # 优先使用编辑后内容，其次原始内容
+            page_content = page.content or ""
+            if not page_content.strip():
+                continue
             page_metadata = {
                 "title": doc.title,
                 "source_type": doc.source_type,
                 "knowledge_base_id": str(kb.id),
                 "doc_id": str(doc.id),
-                "source": meta.get("file_type", "unknown"),
-                "source_path": source_path,
-                "page_number": i,
-                "total_pages": len(pages),
+                "page_id":page.id,
+                "file_type": meta.get("file_type", "unknown"),
+                "page_number": page.page_number,
+                "total_pages": page.total_pages,
                 "doc_type_code": doc.doc_type_code,
             }
             llama_docs.append(
                 LlamaDocument(
-                    text=page_text,
+                    text=page_content,
                     metadata=page_metadata,
-                    doc_id=f"{doc.id}_page_{i}",
+                    doc_id=f"{doc.id}",
                 )
             )
+
+        if not llama_docs:
+            raise ValueError("文档解析后没有有效页面内容")
 
         node_parser = MarkdownNodeParser()
         pipeline = IngestionPipeline(
@@ -318,7 +315,7 @@ class DocumentPipeline:
             vector_store=rag_service._vector_store,
         )
         await pipeline.arun(documents=llama_docs)
-        logger.info(f"Paged document vectorized: doc_id={doc.id}, pages={len(pages)}")
+        logger.info(f"Paged document vectorized from pages: doc_id={doc.id}, pages={len(llama_docs)}")
 
     async def publish_to_feishu(self, structured_result_id: int):
         """将结构化结果发布到飞书云文档"""

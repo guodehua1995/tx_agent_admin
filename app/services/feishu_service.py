@@ -86,9 +86,13 @@ class FeishuService:
         """构建消息卡片"""
         source_elements = ""
         for i, src in enumerate(sources[:3], 1):
-            title = src.get("metadata", {}).get("title", "未知来源")
-            url = src.get("metadata", {}).get("url")
-            source_elements += f"[{title}]({url})\n"
+            metadata = src.get("metadata", {})
+            type = metadata.get("type")
+            if type == "doc_url" or type == "img_url":
+                title = metadata.get("title", "未知来源")
+                url = metadata.get("url")
+                source_elements += f"[{title}]({url})\n"
+            
         
         elemsnts = [
                 {"tag": "div", "text": {"tag": "lark_md", "content": answer}},

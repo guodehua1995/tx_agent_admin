@@ -7,7 +7,7 @@ from llama_index.core import VectorStoreIndex
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 
 from app.log import logger
-from app.models.rag import Document, KnowledgeBase, LLMProviderConfig
+from app.models.rag import Document, KnowledgeBase, LLMProviderConfig,DocumentPage
 from app.services.llm_builder import build_embed_model, build_llm
 from app.settings import settings
 from app.agents.tools import KdVectorQueryToolProvider
@@ -220,18 +220,35 @@ class RAGService:
     async def _extract_sources_from_tool_calls(self, tool_calls) -> list:
         """从 Agent 工具调用结果中提取 sources"""
         doc_ids = set()
+        page_ids = set()
         for tool_call in tool_calls:
             try:
                 tool_result = json.loads(tool_call.tool_output.blocks[0].text)
                 for item in tool_result:
                     if isinstance(item, dict):
                         doc_id = item.get("metadata", {}).get("doc_id")
+                        page_id = item.get("metadata", {}).get("page_id")
                         if doc_id:
                             doc_ids.add(int(doc_id))
+                        if page_id:
+                            page_ids.add(int(page_id))
             except (json.JSONDecodeError, ValueError, TypeError):
                 continue
 
         sources_data = []
+
+        if page_ids:
+            pages = await DocumentPage.filter(id__in=list(page_ids)).all()
+            for page in pages:
+               url = page.screenshot_url
+               sources_data.append({
+                    "metadata": {
+                        "title": f"页码{page.page_number}",
+                        "url": url,
+                        "type": "img_url"
+                    }
+                })
+        
         if doc_ids:
             docs = await Document.filter(id__in=list(doc_ids)).all()
             for doc in docs:
@@ -240,8 +257,10 @@ class RAGService:
                     "metadata": {
                         "title": doc.title,
                         "url": url,
+                        "type": "doc_url"
                     }
                 })
+        
         return sources_data
 
     async def chat_stream(
@@ -257,7 +276,6 @@ class RAGService:
         from llama_index.core.agent.workflow import AgentStream
 
         try:
-
             provider = KdVectorQueryToolProvider(self._vector_store)
             kd_tools = await provider.build_llamaindex_tools(
                 knowledge_bases=knowledge_bases,

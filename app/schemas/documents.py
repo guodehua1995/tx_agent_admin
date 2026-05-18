@@ -23,3 +23,9 @@ class DocumentUpdate(BaseModel):
 class DocumentSubmitForReview(BaseModel):
     id: int = Field(..., description="文档ID")
     content: str = Field(..., description="文档内容")
+
+
+class PageContentUpdate(BaseModel):
+    document_id: int = Field(..., description="文档ID")
+    page_number: int = Field(..., description="页码")
+    content: str = Field(..., description="编辑后的页面内容")

@@ -1,5 +1,5 @@
 <script setup>
-import { h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
+import { computed, h, nextTick, onMounted, ref, resolveDirective, withDirectives } from 'vue'
 import {
   NButton,
   NCard,
@@ -8,6 +8,7 @@ import {
   NDrawer,
   NDrawerContent,
   NEmpty,
+  NImage,
   NInput,
   NSelect,
   NSpace,
@@ -17,6 +18,8 @@ import {
   NTimelineItem,
 } from 'naive-ui'
 import { useRouter } from 'vue-router'
+import Vditor from 'vditor'
+import 'vditor/dist/index.css'
 
 import CommonPage from '@/components/page/CommonPage.vue'
 import QueryBarItem from '@/components/query-bar/QueryBarItem.vue'
@@ -54,21 +57,38 @@ const reviewComment = ref('')
 const reviewLoading = ref(false)
 const drawerContentLoading = ref(false)
 
+// 分页审核状态
+const isPagedDoc = computed(() => reviewDoc.value?.pages?.length > 0)
+const pageList = computed(() => reviewDoc.value?.pages || [])
+const currentPageIndex = ref(0)
+const currentPageDetail = ref(null)
+const currentPageContent = ref('')
+const pageEdits = ref([]) // 收集所有页面的编辑内容
+const pagePreviewContainer = ref(null)
+
 async function openReviewDrawer(row) {
   drawerVisible.value = true
   reviewDoc.value = row
   reviewDocContent.value = ''
   reviewComment.value = ''
   reviewHistory.value = []
+  currentPageDetail.value = null
+  currentPageContent.value = ''
+  currentPageIndex.value = 0
+  pageEdits.value = []
   drawerContentLoading.value = true
   try {
     const [docRes, histRes] = await Promise.all([
-      api.getDocument({ document_id: row.id }),
+      api.getReview({ document_id: row.id }),
       api.getReviewHistory({ document_id: row.id }),
     ])
     reviewDoc.value = docRes.data
     reviewDocContent.value = docRes.data?.content || ''
     reviewHistory.value = histRes.data || []
+    // 如果是分页文档，加载第一页
+    if (isPagedDoc.value) {
+      await loadReviewPageDetail(0)
+    }
   } catch {
     reviewHistory.value = []
   } finally {
@@ -76,15 +96,61 @@ async function openReviewDrawer(row) {
   }
 }
 
+async function loadReviewPageDetail(index) {
+  const page = pageList.value[index]
+  if (!page) return
+  currentPageIndex.value = index
+  try {
+    const res = await api.getDocPageDetail({ doc_id: reviewDoc.value.id, page_number: page.page_number })
+    currentPageDetail.value = res.data
+    currentPageContent.value = res.data?.content || ''
+    // 检查 pageEdits 中是否已有该页编辑
+    const existingEdit = pageEdits.value.find((e) => e.page_number === page.page_number)
+    if (existingEdit) {
+      currentPageContent.value = existingEdit.content
+    }
+    // 只读预览
+    nextTick(() => {
+      if (pagePreviewContainer.value && currentPageContent.value) {
+        Vditor.preview(pagePreviewContainer.value, currentPageContent.value, {
+          mode: 'light',
+          theme: { current: 'light' },
+        })
+      }
+    })
+  } catch {
+    $message?.error('获取页面详情失败')
+  }
+}
+
+// 保存当前页编辑到 pageEdits 缓存
+function saveCurrentPageEdit() {
+  if (!currentPageDetail.value) return
+  const pageNum = currentPageDetail.value.page_number
+  const idx = pageEdits.value.findIndex((e) => e.page_number === pageNum)
+  if (idx >= 0) {
+    pageEdits.value[idx].content = currentPageContent.value
+  } else {
+    pageEdits.value.push({ page_number: pageNum, content: currentPageContent.value })
+  }
+}
+
 async function handleApprove() {
   if (!reviewDoc.value) return
   reviewLoading.value = true
   try {
-    const res = await api.approveReview({
+    const payload = {
       document_id: reviewDoc.value.id,
       action: 'approve',
       comment: reviewComment.value || undefined,
-    })
+    }
+    // 如果是分页文档且有编辑内容，提交 page_edits
+    if (isPagedDoc.value && pageEdits.value.length > 0) {
+      // 保存当前页编辑（如果有）
+      saveCurrentPageEdit()
+      payload.page_edits = pageEdits.value
+    }
+    const res = await api.approveReview(payload)
     if (res.code === 0) {
       $message?.success('审核通过')
       drawerVisible.value = false
@@ -279,7 +345,7 @@ const columns = [
     </CrudTable>
 
     <!-- Review Detail Drawer -->
-    <NDrawer v-model:show="drawerVisible" placement="right" :width="600">
+    <NDrawer v-model:show="drawerVisible" placement="right" :width="900">
       <NDrawerContent title="审核详情">
         <NSpin :show="drawerContentLoading">
           <template v-if="reviewDoc">
@@ -299,17 +365,81 @@ const columns = [
               }}</NDescriptionsItem>
             </NDescriptions>
 
-            <NCard title="文档内容" size="small" style="margin-top: 16px">
-              <NInput
-                v-if="reviewDocContent"
-                :value="reviewDocContent"
-                type="textarea"
-                :rows="12"
-                readonly
-                style="font-family: monospace"
-              />
-              <NEmpty v-else description="暂无文档内容" />
-            </NCard>
+            <!-- 分页文档浏览模式 -->
+            <template v-if="isPagedDoc">
+              <NCard title="分页浏览" size="small" style="margin-top: 16px">
+                <div style="display: flex; gap: 16px">
+                  <!-- 左侧：页面缩略图列表 -->
+                  <div style="width: 120px; flex-shrink: 0; max-height: 500px; overflow-y: auto">
+                    <div
+                      v-for="(page, idx) in pageList"
+                      :key="page.page_number"
+                      :style="{
+                        border: idx === currentPageIndex ? '2px solid #18a058' : '1px solid #e0e0e0',
+                        borderRadius: '6px',
+                        padding: '4px',
+                        marginBottom: '6px',
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        background: idx === currentPageIndex ? '#f0faf4' : '#fff',
+                      }"
+                      @click="loadReviewPageDetail(idx)"
+                    >
+                      <NImage
+                        v-if="page.screenshot_url"
+                        :src="page.screenshot_url"
+                        :img-props="{ style: 'width: 100px; border-radius: 4px' }"
+                        preview-disabled
+                      />
+                      <div v-else style="width: 100px; height: 56px; background: #f5f5f5; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 12px">
+                        无截图
+                      </div>
+                      <div style="font-size: 11px; margin-top: 2px; color: #666">第 {{ page.page_number }} 页</div>
+                    </div>
+                  </div>
+
+                  <!-- 右侧：当前页截图+内容 -->
+                  <div style="flex: 1; min-width: 0">
+                    <div v-if="currentPageDetail?.screenshot_url" style="margin-bottom: 12px">
+                      <NImage
+                        :src="currentPageDetail.screenshot_url"
+                        :img-props="{ style: 'max-width: 100%; border-radius: 4px' }"
+                      />
+                    </div>
+                    <NCard size="small" :title="`第 ${currentPageDetail?.page_number || '-'} 页内容`">
+                      <NInput
+                        v-if="reviewDoc.status === 'pending_review'"
+                        v-model:value="currentPageContent"
+                        type="textarea"
+                        :rows="10"
+                        placeholder="暂无页面内容"
+                        style="font-family: monospace"
+                        @blur="saveCurrentPageEdit"
+                      />
+                      <template v-else>
+                        <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" />
+                        <NEmpty v-else description="暂无页面内容" />
+                      </template>
+                    </NCard>
+                  </div>
+                </div>
+              </NCard>
+            </template>
+
+            <!-- 非分页文档内容 -->
+            <template v-else>
+              <NCard title="文档内容" size="small" style="margin-top: 16px">
+                <NInput
+                  v-if="reviewDocContent"
+                  :value="reviewDocContent"
+                  type="textarea"
+                  :rows="12"
+                  readonly
+                  style="font-family: monospace"
+                />
+                <NEmpty v-else description="暂无文档内容" />
+              </NCard>
+            </template>
 
             <NCard
               v-if="reviewHistory.length"
@@ -338,15 +468,6 @@ const columns = [
                 style="margin-bottom: 12px"
               />
               <NSpace>
-                <!-- <NButton
-                  v-permission="'post/api/v1/review/reject'"
-                  type="warning"
-                  :loading="reviewLoading"
-                  @click="handleEditFromReview"
-                >
-                  编辑
-                </NButton>-->
-
                 <NButton
                   v-permission="'post/api/v1/review/approve'"
                   type="success"
