@@ -7,7 +7,7 @@ from app.controllers.document import document_controller
 from app.controllers.review import review_controller
 from app.core.ctx import CTX_USER_ID
 from app.models.enums import DocumentStatus, ReviewAction
-from app.models.rag import DocumentPage, StructuredResult
+from app.models.rag import DocumentPage, SlicingResult
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.reviews import ReviewSubmit
 from app.services.document_pipeline import document_pipeline
@@ -38,8 +38,8 @@ async def get_review_detail(document_id: int = Query(..., description="文档ID"
     doc = await document_controller.get(id=document_id)
     doc_dict = await doc.to_dict()
 
-    structured = await StructuredResult.filter(document_id=document_id).first()
-    doc_dict["structured_result"] = await structured.to_dict() if structured else None
+    slicing = await SlicingResult.filter(document_id=document_id).first()
+    doc_dict["slicing_result"] = await slicing.to_dict() if slicing else None
 
     reviews = await review_controller.get_by_document(document_id)
     doc_dict["review_history"] = [await r.to_dict() for r in reviews]
@@ -73,17 +73,8 @@ async def approve_document(
             "reviewer_id": CTX_USER_ID.get(),
             "action": ReviewAction.APPROVE,
             "comment": review_in.comment,
-            "edited_content": review_in.edited_content,
         }
     )
-
-    # 如果有按页编辑内容，写入 DocumentPage.content
-    if review_in.page_edits:
-        for edit in review_in.page_edits:
-            await DocumentPage.filter(
-                document_id=review_in.document_id,
-                page_number=edit.page_number,
-            ).update(content=edit.content)
 
     doc.status = DocumentStatus.APPROVED
     await doc.save()
@@ -115,10 +106,10 @@ async def reject_document(review_in: ReviewSubmit):
     return Success(msg="已驳回")
 
 
-@router.post("/publish_feishu", summary="发布结构化结果到飞书")
+@router.post("/publish_feishu", summary="发布切片结果到飞书")
 async def publish_to_feishu(
-    structured_result_id: int = Query(..., description="结构化结果ID"),
+    slicing_result_id: int = Query(..., description="切片结果ID"),
     background_tasks: BackgroundTasks = None,
 ):
-    background_tasks.add_task(document_pipeline.publish_to_feishu, structured_result_id)
+    background_tasks.add_task(document_pipeline.publish_to_feishu, slicing_result_id)
     return Success(msg="已加入发布队列")

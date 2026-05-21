@@ -103,7 +103,7 @@ async def chat_with_agent(chat_in: ChatRequest):
     recent_messages = await conversation_controller.get_messages(
         conv.id, limit=agent.max_history_turns * 2
     )
-    history = [{"role": msg.role, "content": msg.content} for msg in reversed(list(recent_messages))]
+    history = [{"type": msg.type, "content": msg.content} for msg in reversed(list(recent_messages))]
 
     chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
 
@@ -119,16 +119,28 @@ async def chat_with_agent(chat_in: ChatRequest):
     elapsed_ms = int((time.time() - start_time) * 1000)
 
     await ChatMessage.create(
-        conversation_id=conv.id, role="user", content=chat_in.question
+        conversation_id=conv.id, type="user", content=chat_in.question
     )
+    for tc in result.get("tool_calls", []):
+        await ChatMessage.create(
+            conversation_id=conv.id,
+            type="tool_call",
+            content=json.dumps({"tool_name": tc["tool_name"], "tool_input": tc["tool_input"]}, ensure_ascii=False),
+        )
+        await ChatMessage.create(
+            conversation_id=conv.id,
+            type="tool_call_result",
+            content=json.dumps({"tool_name": tc["tool_name"], "result": tc["tool_output"]}, ensure_ascii=False),
+        )
     await ChatMessage.create(
         conversation_id=conv.id,
-        role="assistant",
+        type="assistant",
         content=result["answer"],
         retrieved_chunks=result["sources"],
         response_time_ms=elapsed_ms,
     )
-    conv.message_count += 2
+    tool_msg_count = len(result.get("tool_calls", [])) * 2
+    conv.message_count += 2 + tool_msg_count
     conv.last_active_at = datetime.now()
     await conv.save()
 
@@ -167,16 +179,17 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
     recent_messages = await conversation_controller.get_messages(
         conv.id, limit=agent.max_history_turns * 2
     )
-    history = [{"role": msg.role, "content": msg.content} for msg in reversed(list(recent_messages))]
+    history = [{"type": msg.type, "content": msg.content} for msg in reversed(list(recent_messages))]
 
     chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
 
     start_time = time.time()
     full_answer = ""
     sources_data = []
+    tool_calls_data = []
 
     async def event_generator():
-        nonlocal full_answer, sources_data
+        nonlocal full_answer, sources_data, tool_calls_data
         try:
             logger.debug("[Agent] Chat stream started: agent_id=%s, user_id=%s", chat_in.agent_id, user_id)
             async for chunk in rag_service.chat_stream(
@@ -195,6 +208,9 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
                     # SSE 格式：data: {...}\n\n
                     yield f"data: {json.dumps({'type': 'delta', 'content': content}, ensure_ascii=False)}\n\n"
         
+                elif chunk_type == "tool_calls":
+                    tool_calls_data = content if content else []
+
                 elif chunk_type == "sources":
                     sources_data = content if content else []
                     yield f"data: {json.dumps({'type': 'sources', 'content': sources_data}, ensure_ascii=False)}\n\n"
@@ -214,16 +230,28 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
             try:
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 await ChatMessage.create(
-                    conversation_id=conv.id, role="user", content=chat_in.question
+                    conversation_id=conv.id, type="user", content=chat_in.question
                 )
+                for tc in tool_calls_data:
+                    await ChatMessage.create(
+                        conversation_id=conv.id,
+                        type="tool_call",
+                        content=json.dumps({"tool_name": tc["tool_name"], "tool_input": tc["tool_input"]}, ensure_ascii=False),
+                    )
+                    await ChatMessage.create(
+                        conversation_id=conv.id,
+                        type="tool_call_result",
+                        content=json.dumps({"tool_name": tc["tool_name"], "result": tc["tool_output"]}, ensure_ascii=False),
+                    )
                 await ChatMessage.create(
                     conversation_id=conv.id,
-                    role="assistant",
+                    type="assistant",
                     content=full_answer or "（无响应）",
                     retrieved_chunks=sources_data,
                     response_time_ms=elapsed_ms,
                 )
-                conv.message_count += 2
+                tool_msg_count = len(tool_calls_data) * 2
+                conv.message_count += 2 + tool_msg_count
                 conv.last_active_at = datetime.now()
                 await conv.save()
                 

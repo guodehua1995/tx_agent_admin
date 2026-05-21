@@ -32,6 +32,7 @@ class DocumentTypeCode(StrEnum):
     """文档类型编码 — 纯后端枚举，根据 code 路由到不同处理函数"""
     FEISHU_DOC = "feishu_doc"
     PPT = "ppt"
+    CONTRACT = "contract"
 
     @classmethod
     def get_display_map(cls) -> dict[str, str]:
@@ -39,6 +40,7 @@ class DocumentTypeCode(StrEnum):
         return {
             cls.FEISHU_DOC: "飞书文档",
             cls.PPT: "PPT文档",
+            cls.CONTRACT: "合同",
         }
 
     @classmethod
@@ -53,15 +55,15 @@ class DocumentTypeCode(StrEnum):
 
 
 class DocumentStatus(StrEnum):
-    PENDING_FETCH = "pending_fetch"
-    FETCHED = "fetched"
-    STRUCTURING = "structuring"
-    PENDING_REVIEW = "pending_review"
-    APPROVED = "approved"
-    VECTORIZING = "vectorizing"
-    COMPLETED = "completed"
-    REJECTED = "rejected"
-    FAILED = "failed"
+    PENDING_EXTRACT = "pending_extract"   # 待提取内容
+    EXTRACTED = "extracted"               # 已提取（瞬态，以前叫 fetched）
+    PENDING_REVIEW = "pending_review"     # 待审核
+    APPROVED = "approved"                 # 审核通过
+    SLICING = "slicing"                   # 切片中（以前叫 structuring）
+    VECTORIZING = "vectorizing"           # 向量化中
+    COMPLETED = "completed"               # 完成
+    REJECTED = "rejected"                 # 已驳回
+    FAILED = "failed"                     # 处理失败
 
 
 class FeishuPublishStatus(StrEnum):
@@ -82,10 +84,12 @@ class LLMProviderType(StrEnum):
     AZURE_OPENAI = "azure_openai"
 
 
-class MessageRole(StrEnum):
+class MessageType(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+    TOOL_CALL = "tool_call"
+    TOOL_CALL_RESULT = "tool_call_result"
 
 
 class RetrievalMode(StrEnum):

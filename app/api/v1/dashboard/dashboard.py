@@ -22,9 +22,9 @@ async def get_dashboard_stats():
     processing_docs = await Document.filter(
         is_deleted=False,
         status__in=[
-            DocumentStatus.PENDING_FETCH,
-            DocumentStatus.FETCHING,
-            DocumentStatus.STRUCTURING,
+            DocumentStatus.PENDING_EXTRACT,
+            DocumentStatus.EXTRACTED,
+            DocumentStatus.SLICING,
             DocumentStatus.VECTORIZING,
         ],
     ).count()

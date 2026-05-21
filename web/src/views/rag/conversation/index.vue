@@ -1,5 +1,5 @@
 <script setup>
-import { h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { NButton, NDrawer, NDrawerContent, NSelect, NTag } from 'naive-ui'
 
 import CommonPage from '@/components/page/CommonPage.vue'
@@ -19,6 +19,8 @@ const agentOptions = ref([])
 const drawerVisible = ref(false)
 const messages = ref([])
 const messageLoading = ref(false)
+// 只展示 user 和 assistant 消息
+const displayMessages = computed(() => messages.value.filter((m) => m.type === 'user' || m.type === 'assistant'))
 
 async function loadAgents() {
   const res = await api.getAgentList({ page: 1, page_size: 9999 })
@@ -129,21 +131,21 @@ const columns = [
           暂无消息
         </div>
         <div v-else>
-          <div v-for="(msg, idx) in messages" :key="idx" style="margin-bottom: 16px">
-            <div :style="{ textAlign: msg.role === 'user' ? 'right' : 'left' }">
+          <div v-for="(msg, idx) in displayMessages" :key="idx" style="margin-bottom: 16px">
+            <div :style="{ textAlign: msg.type === 'user' ? 'right' : 'left' }">
               <NTag
-                :type="msg.role === 'user' ? 'info' : 'success'"
+                :type="msg.type === 'user' ? 'info' : 'success'"
                 size="small"
                 style="margin-bottom: 4px"
               >
-                {{ msg.role === 'user' ? '用户' : 'Agent' }}
+                {{ msg.type === 'user' ? '用户' : 'Agent' }}
               </NTag>
               <div style="font-size: 12px; color: #999; margin-bottom: 2px">
                 {{ formatDate(msg.created_at) }}
               </div>
               <div
                 :style="{
-                  background: msg.role === 'user' ? '#e8f4fd' : '#f0f9eb',
+                  background: msg.type === 'user' ? '#e8f4fd' : '#f0f9eb',
                   padding: '8px 12px',
                   borderRadius: '8px',
                   display: 'inline-block',

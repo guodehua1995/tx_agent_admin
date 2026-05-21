@@ -1,16 +1,15 @@
 """文档管线单元测试
 
 测试范围:
-- process_document: 三种来源类型（飞书、文件、URL）
-- process_document: 含结构化流程
-- process_document: 错误处理
-- vectorize_document: 审核内容优先 / 结构化内容 / 原始内容
-- publish_to_feishu: 发布成功 / 失败处理
+- process_document: 调用 run_extraction → 回写 content/source_meta → PENDING_REVIEW
+- process_document: 提取异常时落到 FAILED 状态
+- vectorize_document: 非分页文档优先使用切片产物，否则回退原始内容
+- vectorize_document: 入库失败设置 FAILED
+- publish_to_feishu: 成功 / 失败状态流
 - handle_bot_message: 完整消息处理流程
 """
 
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,15 +19,16 @@ MODULE = "app.services.document_pipeline"
 
 def _make_doc(**overrides):
     """构建 mock Document 对象"""
-    doc = AsyncMock()
+    doc = MagicMock()
     doc.id = overrides.get("id", 1)
     doc.title = overrides.get("title", "测试文档")
     doc.content = overrides.get("content", "")
     doc.source_type = overrides.get("source_type", "feishu_doc")
     doc.source_meta = overrides.get("source_meta", {})
-    doc.status = overrides.get("status", "pending_fetch")
+    doc.status = overrides.get("status", "pending_extract")
     doc.error_message = None
     doc.doc_type_id = overrides.get("doc_type_id", 1)
+    doc.doc_type_code = overrides.get("doc_type_code", "meeting_notes")
     doc.knowledge_base_id = overrides.get("knowledge_base_id", 1)
     doc.save = AsyncMock()
     return doc
@@ -39,162 +39,50 @@ def _make_doc(**overrides):
 
 class TestProcessDocument:
     @pytest.mark.asyncio
-    async def test_feishu_source_success(self):
-        """飞书文档来源: 拉取内容 → 结构化 → 待审核"""
+    async def test_extract_success_sets_pending_review(self):
+        """提取成功: 写回 content + source_meta → 状态 pending_review"""
         from app.services.document_pipeline import DocumentPipeline
+        from app.services.extraction import ExtractionResult
 
         pipeline = DocumentPipeline()
-        doc = _make_doc(
-            source_type="feishu_doc",
-            source_meta={"feishu_url": "https://abc.feishu.cn/docx/Token123"},
+        doc = _make_doc(source_meta={"existing": "v"})
+
+        extract_result = ExtractionResult(
+            content="提取后的全文",
+            pages=[],
+            source_meta_patch={"filename": "a.docx", "file_type": "docx"},
         )
-        doc_type = MagicMock()
-        doc_type.needs_structuring = False
 
         with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.feishu_service") as mock_feishu, \
-             patch(f"{MODULE}.document_type_controller") as mock_dt_ctrl, \
-             patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl:
-
+             patch(f"{MODULE}.run_extraction", AsyncMock(return_value=extract_result)) as mock_run:
             MockDoc.get = AsyncMock(return_value=doc)
-            mock_feishu.parse_feishu_url.return_value = ("Token123", "docx")
-
-            # 模拟活跃的飞书机器人配置
-            mock_bot = MagicMock()
-            mock_bot.app_id = "app1"
-            mock_bot.app_secret = "secret1"
-            mock_bot_ctrl.model.filter.return_value.first = AsyncMock(return_value=mock_bot)
-
-            mock_feishu.get_tenant_access_token = AsyncMock(return_value="t-token")
-            mock_feishu.fetch_document_content = AsyncMock(return_value="飞书文档内容")
-
-            mock_dt_ctrl.get = AsyncMock(return_value=doc_type)
 
             await pipeline.process_document(1)
 
-        # 文档内容应被设置
-        assert doc.content == "飞书文档内容"
-        # 最终状态应为 pending_review
+        mock_run.assert_awaited_once_with(doc)
+        assert doc.content == "提取后的全文"
+        # source_meta 应做合并而非覆盖
+        assert doc.source_meta == {"existing": "v", "filename": "a.docx", "file_type": "docx"}
+        # 最终状态：pending_review
         assert doc.status == "pending_review"
-        assert doc.save.call_count >= 2
+        assert doc.save.await_count >= 2
 
     @pytest.mark.asyncio
-    async def test_file_upload_source(self):
-        """文件上传来源: 读取文件 → 待审核"""
+    async def test_extract_failure_sets_failed(self):
+        """提取异常: 状态置为 failed 且记录 error_message"""
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
-        doc = _make_doc(
-            source_type="file_upload",
-            source_meta={"file_path": "/tmp/test.txt"},
-        )
-        doc_type = MagicMock()
-        doc_type.needs_structuring = False
+        doc = _make_doc()
 
         with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.document_type_controller") as mock_dt_ctrl, \
-             patch("builtins.open", mock_open(read_data="文件内容")):
-
-            MockDoc.get = AsyncMock(return_value=doc)
-            mock_dt_ctrl.get = AsyncMock(return_value=doc_type)
-
-            await pipeline.process_document(1)
-
-        assert doc.content == "文件内容"
-        assert doc.status == "pending_review"
-
-    @pytest.mark.asyncio
-    async def test_web_url_source(self):
-        """URL 来源: 抓取网页 → 待审核"""
-        from app.services.document_pipeline import DocumentPipeline
-
-        pipeline = DocumentPipeline()
-        doc = _make_doc(
-            source_type="web_url",
-            source_meta={"url": "https://example.com"},
-        )
-        doc_type = MagicMock()
-        doc_type.needs_structuring = False
-
-        mock_resp = MagicMock()
-        mock_resp.text = "<html>网页内容</html>"
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        mock_ctx = AsyncMock()
-        mock_ctx.__aenter__.return_value = mock_client
-
-        with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.document_type_controller") as mock_dt_ctrl, \
-             patch(f"{MODULE}.httpx", create=True):
-
-            MockDoc.get = AsyncMock(return_value=doc)
-            mock_dt_ctrl.get = AsyncMock(return_value=doc_type)
-
-            # httpx 在 _fetch_web_content 内部是懒导入的
-            mock_httpx_mod = MagicMock()
-            mock_httpx_mod.AsyncClient.return_value = mock_ctx
-            with patch.dict(sys.modules, {"httpx": mock_httpx_mod}):
-                await pipeline.process_document(1)
-
-        assert doc.content == "<html>网页内容</html>"
-        assert doc.status == "pending_review"
-
-    @pytest.mark.asyncio
-    async def test_with_structuring(self):
-        """文档需要结构化: 获取内容 → 结构化 → 待审核"""
-        from app.services.document_pipeline import DocumentPipeline
-
-        pipeline = DocumentPipeline()
-        doc = _make_doc(
-            source_type="file_upload",
-            source_meta={"file_path": "/tmp/test.txt"},
-        )
-        doc_type = MagicMock()
-        doc_type.needs_structuring = True
-        doc_type.code = "meeting_notes"
-
-        mock_structuring_result = MagicMock()
-        mock_structuring_result.content = "结构化后的内容"
-        mock_structuring_result.prompt_used = "prompt"
-        mock_structuring_result.token_usage = {}
-
-        chat_model = MagicMock()
-        chat_model.id = 5
-
-        with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.document_type_controller") as mock_dt_ctrl, \
-             patch(f"{MODULE}.ai_config_controller") as mock_ai_ctrl, \
-             patch(f"{MODULE}.run_structuring") as mock_run_struct, \
-             patch(f"{MODULE}.StructuredResult") as MockSR, \
-             patch("builtins.open", mock_open(read_data="原始内容")):
-
-            MockDoc.get = AsyncMock(return_value=doc)
-            mock_dt_ctrl.get = AsyncMock(return_value=doc_type)
-            mock_ai_ctrl.get_active_chat_models = AsyncMock(return_value=[chat_model])
-            mock_run_struct.return_value = mock_structuring_result
-            MockSR.create = AsyncMock()
-
-            await pipeline.process_document(1)
-
-        mock_run_struct.assert_called_once_with("meeting_notes", "原始内容", chat_model)
-        MockSR.create.assert_called_once()
-        assert doc.status == "pending_review"
-
-    @pytest.mark.asyncio
-    async def test_error_sets_failed_status(self):
-        """处理失败时文档状态应设为 failed"""
-        from app.services.document_pipeline import DocumentPipeline
-
-        pipeline = DocumentPipeline()
-        doc = _make_doc(source_type="file_upload", source_meta={"file_path": ""})
-
-        with patch(f"{MODULE}.Document") as MockDoc:
+             patch(f"{MODULE}.run_extraction", AsyncMock(side_effect=RuntimeError("解析失败"))):
             MockDoc.get = AsyncMock(return_value=doc)
 
             await pipeline.process_document(1)
 
         assert doc.status == "failed"
-        assert doc.error_message is not None
+        assert "解析失败" in doc.error_message
 
 
 # ========== vectorize_document ==========
@@ -202,66 +90,66 @@ class TestProcessDocument:
 
 class TestVectorizeDocument:
     @pytest.mark.asyncio
-    async def test_uses_edited_review_content(self):
-        """优先使用审核编辑后的内容"""
+    async def test_uses_sliced_content_when_available(self):
+        """非分页非合同文档：优先使用切片产物入库"""
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
-        doc = _make_doc(content="原始内容")
-        review = MagicMock()
-        review.edited_content = "审核编辑后的内容"
+        # doc_type_code 不属于 contract 也不在分页类型集合中 → 走 else 分支
+        doc = _make_doc(content="原始内容", doc_type_code="__non_paged_non_contract__")
+
+        slicing = MagicMock()
+        slicing.sliced_content = "切片后的内容"
 
         kb = MagicMock()
-        kb.id = 1
 
         with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.review_controller") as mock_review_ctrl, \
+             patch(f"{MODULE}.SlicingResult") as MockSR, \
              patch(f"{MODULE}.KnowledgeBase") as MockKB, \
+             patch(f"{MODULE}.DocumentTypeCode") as MockDTC, \
              patch(f"{MODULE}.rag_service") as mock_rag:
 
             MockDoc.get = AsyncMock(return_value=doc)
-            mock_review_ctrl.get_by_document = AsyncMock(return_value=[review])
+            MockSR.filter.return_value.first = AsyncMock(return_value=slicing)
             MockKB.get = AsyncMock(return_value=kb)
+
+            # 让分支判断都走到 else
+            MockDTC.CONTRACT = "contract"
+            MockDTC.is_paged_type = MagicMock(return_value=False)
+
             mock_rag.ingest_document = AsyncMock()
 
             await pipeline.vectorize_document(1)
 
-        # 验证使用的是审核编辑内容
-        call_kwargs = mock_rag.ingest_document.call_args[1]
-        assert call_kwargs["content"] == "审核编辑后的内容"
+        call_kwargs = mock_rag.ingest_document.call_args.kwargs
+        assert call_kwargs["content"] == "切片后的内容"
         assert doc.status == "completed"
 
     @pytest.mark.asyncio
-    async def test_uses_structured_content(self):
-        """无编辑内容时使用结构化内容"""
+    async def test_falls_back_to_doc_content_without_slicing(self):
+        """无切片产物时使用 doc.content"""
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
-        doc = _make_doc(content="原始内容")
-        review = MagicMock()
-        review.edited_content = None
-
-        structured = MagicMock()
-        structured.structured_content = "结构化内容"
-
-        kb = MagicMock()
+        doc = _make_doc(content="原始内容", doc_type_code="__non_paged_non_contract__")
 
         with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.review_controller") as mock_review_ctrl, \
-             patch(f"{MODULE}.StructuredResult") as MockSR, \
+             patch(f"{MODULE}.SlicingResult") as MockSR, \
              patch(f"{MODULE}.KnowledgeBase") as MockKB, \
+             patch(f"{MODULE}.DocumentTypeCode") as MockDTC, \
              patch(f"{MODULE}.rag_service") as mock_rag:
 
             MockDoc.get = AsyncMock(return_value=doc)
-            mock_review_ctrl.get_by_document = AsyncMock(return_value=[review])
-            MockSR.filter.return_value.first = AsyncMock(return_value=structured)
-            MockKB.get = AsyncMock(return_value=kb)
+            MockSR.filter.return_value.first = AsyncMock(return_value=None)
+            MockKB.get = AsyncMock(return_value=MagicMock())
+            MockDTC.CONTRACT = "contract"
+            MockDTC.is_paged_type = MagicMock(return_value=False)
             mock_rag.ingest_document = AsyncMock()
 
             await pipeline.vectorize_document(1)
 
-        call_kwargs = mock_rag.ingest_document.call_args[1]
-        assert call_kwargs["content"] == "结构化内容"
+        call_kwargs = mock_rag.ingest_document.call_args.kwargs
+        assert call_kwargs["content"] == "原始内容"
 
     @pytest.mark.asyncio
     async def test_error_sets_failed_status(self):
@@ -269,22 +157,22 @@ class TestVectorizeDocument:
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
-        doc = _make_doc(content="原始内容")
+        doc = _make_doc(content="原始内容", doc_type_code="__non_paged_non_contract__")
 
         with patch(f"{MODULE}.Document") as MockDoc, \
-             patch(f"{MODULE}.review_controller") as mock_review_ctrl, \
+             patch(f"{MODULE}.SlicingResult") as MockSR, \
              patch(f"{MODULE}.KnowledgeBase") as MockKB, \
+             patch(f"{MODULE}.DocumentTypeCode") as MockDTC, \
              patch(f"{MODULE}.rag_service") as mock_rag:
 
             MockDoc.get = AsyncMock(return_value=doc)
-            mock_review_ctrl.get_by_document = AsyncMock(return_value=[])
+            MockSR.filter.return_value.first = AsyncMock(return_value=None)
             MockKB.get = AsyncMock(return_value=MagicMock())
+            MockDTC.CONTRACT = "contract"
+            MockDTC.is_paged_type = MagicMock(return_value=False)
             mock_rag.ingest_document = AsyncMock(side_effect=Exception("入库失败"))
 
-            # StructuredResult.filter 也需要 mock
-            with patch(f"{MODULE}.StructuredResult") as MockSR:
-                MockSR.filter.return_value.first = AsyncMock(return_value=None)
-                await pipeline.vectorize_document(1)
+            await pipeline.vectorize_document(1)
 
         assert doc.status == "failed"
         assert "入库失败" in doc.error_message
@@ -296,15 +184,15 @@ class TestVectorizeDocument:
 class TestPublishToFeishu:
     @pytest.mark.asyncio
     async def test_publish_success(self):
-        """发布成功: 状态更新为 published"""
+        """发布成功: SlicingResult.feishu_publish_status 应为 published"""
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
 
-        sr = AsyncMock()
+        sr = MagicMock()
         sr.id = 1
         sr.document_id = 10
-        sr.structured_content = "结构化内容"
+        sr.sliced_content = "切片内容"
         sr.feishu_publish_status = None
         sr.feishu_publish_url = None
         sr.save = AsyncMock()
@@ -316,7 +204,7 @@ class TestPublishToFeishu:
         mock_bot.app_id = "app1"
         mock_bot.app_secret = "secret1"
 
-        with patch(f"{MODULE}.StructuredResult") as MockSR, \
+        with patch(f"{MODULE}.SlicingResult") as MockSR, \
              patch(f"{MODULE}.Document") as MockDoc, \
              patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl, \
              patch(f"{MODULE}.feishu_service") as mock_feishu, \
@@ -333,15 +221,18 @@ class TestPublishToFeishu:
 
         assert sr.feishu_publish_status == "published"
         assert sr.feishu_publish_url == "https://feishu.cn/docx/abc"
+        # publish_to_feishu 内部应使用 sliced_content 作为正文
+        published_kwargs = mock_feishu.create_doc_in_folder.call_args.kwargs
+        assert published_kwargs["content"] == "切片内容"
 
     @pytest.mark.asyncio
     async def test_publish_failure(self):
-        """发布失败: 状态设为 failed"""
+        """发布失败: SlicingResult.feishu_publish_status 设为 failed"""
         from app.services.document_pipeline import DocumentPipeline
 
         pipeline = DocumentPipeline()
 
-        sr = AsyncMock()
+        sr = MagicMock()
         sr.id = 1
         sr.document_id = 10
         sr.feishu_publish_status = None
@@ -350,7 +241,7 @@ class TestPublishToFeishu:
         doc = MagicMock()
         doc.title = "测试"
 
-        with patch(f"{MODULE}.StructuredResult") as MockSR, \
+        with patch(f"{MODULE}.SlicingResult") as MockSR, \
              patch(f"{MODULE}.Document") as MockDoc, \
              patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl:
 
@@ -378,7 +269,7 @@ class TestHandleBotMessage:
         mock_bot.agent_id = 1
         mock_agent = MagicMock()
         mock_agent.id = 1
-        mock_agent.knowledge_bases = AsyncMock()
+        mock_agent.knowledge_bases = MagicMock()
         mock_agent.knowledge_bases.all = AsyncMock(return_value=[])
 
         with patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl, \
@@ -406,7 +297,7 @@ class TestHandleBotMessage:
         mock_agent.chat_model_id = 5
         mock_agent.system_prompt = "你是AI助手"
         mock_agent.max_history_turns = 5
-        mock_agent.knowledge_bases = AsyncMock()
+        mock_agent.knowledge_bases = MagicMock()
         mock_kb = MagicMock()
         mock_agent.knowledge_bases.all = AsyncMock(return_value=[mock_kb])
 
@@ -445,55 +336,6 @@ class TestHandleBotMessage:
 
         assert result["answer"] == "AI 的回答"
         mock_rag.chat.assert_called_once()
-        assert MockChatMsg.create.call_count == 2  # user + assistant
+        # user + assistant
+        assert MockChatMsg.create.call_count == 2
         assert mock_conv.message_count == 2
-
-    @pytest.mark.asyncio
-    async def test_creates_user_if_not_found(self):
-        """飞书用户不存在时自动创建"""
-        from app.services.document_pipeline import DocumentPipeline
-
-        pipeline = DocumentPipeline()
-
-        mock_bot = MagicMock()
-        mock_bot.agent_id = 1
-        mock_agent = MagicMock()
-        mock_agent.id = 1
-        mock_agent.chat_model_id = 5
-        mock_agent.system_prompt = ""
-        mock_agent.max_history_turns = 3
-        mock_agent.knowledge_bases = AsyncMock()
-        mock_kb = MagicMock()
-        mock_agent.knowledge_bases.all = AsyncMock(return_value=[mock_kb])
-
-        mock_new_user = MagicMock()
-        mock_new_user.id = 99
-
-        mock_conv = MagicMock()
-        mock_conv.id = 100
-        mock_conv.message_count = 0
-        mock_conv.save = AsyncMock()
-
-        with patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl, \
-             patch(f"{MODULE}.Agent") as MockAgent, \
-             patch(f"{MODULE}.User") as MockUser, \
-             patch(f"{MODULE}.conversation_controller") as mock_conv_ctrl, \
-             patch(f"{MODULE}.LLMProviderConfig") as MockLLMConfig, \
-             patch(f"{MODULE}.rag_service") as mock_rag, \
-             patch(f"{MODULE}.ChatMessage") as MockChatMsg:
-
-            mock_bot_ctrl.get = AsyncMock(return_value=mock_bot)
-            MockAgent.get = AsyncMock(return_value=mock_agent)
-            MockUser.filter.return_value.first = AsyncMock(return_value=None)
-            MockUser.create = AsyncMock(return_value=mock_new_user)
-            mock_conv_ctrl.get_or_create = AsyncMock(return_value=mock_conv)
-            mock_conv_ctrl.get_messages = AsyncMock(return_value=[])
-            MockLLMConfig.get = AsyncMock(return_value=MagicMock())
-            mock_rag.chat = AsyncMock(return_value={"answer": "hi", "sources": []})
-            MockChatMsg.create = AsyncMock()
-
-            await pipeline.handle_bot_message(1, "ou_newuser", "chat1", "你好")
-
-        MockUser.create.assert_called_once()
-        create_kwargs = MockUser.create.call_args[1]
-        assert create_kwargs["feishu_open_id"] == "ou_newuser"

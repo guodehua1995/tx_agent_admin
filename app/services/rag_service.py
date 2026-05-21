@@ -74,16 +74,25 @@ class RAGService:
         )
 
     async def ingest_document(self, doc_id: str, content: str, kb: KnowledgeBase, metadata: dict):
-        """文档入库: 根据知识库配置构建 IngestionPipeline"""
+        """文档入库: 根据知识库配置构建 IngestionPipeline
+
+        metadata 应包含 BaseVectorMetadata 定义的基础字段:
+            title, source_type, doc_type_code（必填）
+            knowledge_base_id, doc_id 会自动注入
+        """
         from llama_index.core.ingestion import IngestionPipeline
         from llama_index.core.schema import Document as LlamaDocument
+
+        from app.schemas.vector_metadata import BaseVectorMetadata
 
         embedding_config = await LLMProviderConfig.get(id=kb.embedding_model_id)
         embed_model = build_embed_model(embedding_config)
         node_parser = self._build_node_parser(kb)
 
+        # 确保必要字段存在，通过 BaseVectorMetadata 校验
         metadata.update({"knowledge_base_id": str(kb.id), "doc_id": doc_id})
-        llama_doc = LlamaDocument(text=content, metadata=metadata, doc_id=doc_id)
+        validated = BaseVectorMetadata(**metadata)
+        llama_doc = LlamaDocument(text=content, metadata=validated.to_dict(), doc_id=doc_id)
 
         pipeline = IngestionPipeline(
             transformations=[node_parser, embed_model],
@@ -156,6 +165,7 @@ class RAGService:
         try:
             answer_parts = []
             sources = []
+            tool_calls_data = []
 
             async for event in self.chat_stream(
                 question=question,
@@ -167,15 +177,17 @@ class RAGService:
             ):
                 if event["type"] == "delta":
                     answer_parts.append(event["content"])
+                elif event["type"] == "tool_calls":
+                    tool_calls_data = event["content"]
                 elif event["type"] == "sources":
                     sources = event["content"]
                 elif event["type"] == "error":
-                    return {"answer": event["content"], "sources": []}
+                    return {"answer": event["content"], "sources": [], "tool_calls": []}
 
-            return {"answer": "".join(answer_parts), "sources": sources}
+            return {"answer": "".join(answer_parts), "sources": sources, "tool_calls": tool_calls_data}
         except Exception as e:
             logger.error(f"Chat error: {e}")
-            return {"answer": str(e), "sources": []}
+            return {"answer": str(e), "sources": [], "tool_calls": []}
     
     async def _build_chat_agent(
         self,
@@ -194,8 +206,30 @@ class RAGService:
         limited_history = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
         chat_history = []
         for msg in limited_history:
-            role = "user" if msg["role"] == "user" else "assistant"
-            chat_history.append(LlamaChatMessage(role=role, content=str(msg["content"])))
+            msg_type = msg.get("type") or msg.get("role", "user")
+            content = str(msg["content"])
+            if msg_type == "user":
+                chat_history.append(LlamaChatMessage(role="user", content=content))
+            elif msg_type == "assistant":
+                chat_history.append(LlamaChatMessage(role="assistant", content=content))
+            elif msg_type == "tool_call":
+                # 工具调用映射为 assistant （含调用信息）
+                try:
+                    data = json.loads(content)
+                    call_desc = f"[调用工具: {data['tool_name']}] {data.get('tool_input', '')}"
+                except (json.JSONDecodeError, KeyError):
+                    call_desc = content
+                chat_history.append(LlamaChatMessage(role="assistant", content=call_desc))
+            elif msg_type == "tool_call_result":
+                # 工具结果映射为 tool 角色
+                try:
+                    data = json.loads(content)
+                    result_text = data.get("result", content)
+                except (json.JSONDecodeError, KeyError):
+                    result_text = content
+                chat_history.append(LlamaChatMessage(role="tool", content=result_text))
+            else:
+                chat_history.append(LlamaChatMessage(role="assistant", content=content))
 
         agent_prompt = (
             system_prompt
@@ -320,6 +354,21 @@ class RAGService:
                         yield {"type": "delta", "content": delta}
 
             response = await handler
+
+            # 收集工具调用数据
+            tool_calls_data = []
+            for tc in response.tool_calls:
+                try:
+                    tool_output_text = tc.tool_output.blocks[0].text if tc.tool_output else ""
+                except (IndexError, AttributeError):
+                    tool_output_text = ""
+                tool_calls_data.append({
+                    "tool_name": tc.tool_name,
+                    "tool_input": str(tc.tool_input),
+                    "tool_output": tool_output_text,
+                })
+            yield {"type": "tool_calls", "content": tool_calls_data}
+
             sources_data = await self._extract_sources_from_tool_calls(response.tool_calls)
             yield {"type": "sources", "content": sources_data}
 

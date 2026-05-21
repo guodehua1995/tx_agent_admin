@@ -2,7 +2,7 @@
 通用文档转换器
 
 将多种格式的文件（docx, pdf, pptx, png, jpg, xlsx, csv, txt, md）统一转换为
-结构化的 ConvertedPage 列表，为后续 RAG 切片入库提供标准化输入。
+标准化的 ConvertedPage 列表，为后续审核与切片入库提供统一输入。
 
 架构：策略模式 + Handler 注册表，新增文件类型只需实现 BaseFileHandler 并注册。
 
@@ -100,23 +100,33 @@ PPT页面通常包含标题、要点、图表、示意图、流程图等视觉�
 - 不要输出"这一页包含..."之类的描述性前缀，直接输出结构化内容"""
 
 
+# Vision LLM 调用默认参数
+_VISION_LLM_TIMEOUT = 180  # 多模态单次调用超时（秒），图片理解较慢
+_VISION_LLM_MAX_RETRIES = 2  # 额外重试次数
+
+
 async def _call_vision_llm(
     image_bytes: bytes,
     page_num: int,
     context: str = "文档",
     system_prompt: str | None = None,
+    timeout: int = _VISION_LLM_TIMEOUT,
+    max_retries: int = _VISION_LLM_MAX_RETRIES,
 ) -> str:
-    """调用多模态 LLM 理解图片内容
+    """调用多模态 LLM 理解图片内容（流式接收 + 超时控制 + 重试退避）
 
     Args:
         image_bytes: PNG 图片字节
         page_num: 页码
         context: 上下文描述（如"PPT"/"PDF"）
         system_prompt: 自定义系统提示词，默认使用 DOCUMENT_VISION_PROMPT
+        timeout: 单次调用超时秒数
+        max_retries: 额外重试次数
 
     Returns:
         LLM 返回的 Markdown 文本
     """
+    import asyncio
     import base64
 
     from llama_index.core.llms import ChatMessage, ImageBlock, TextBlock
@@ -155,8 +165,50 @@ async def _call_vision_llm(
         ),
     ]
 
-    response = await llm.achat(messages)
-    return response.message.content
+    async def _stream_collect() -> str:
+        response_gen = await llm.astream_chat(messages)
+        chunks: list[str] = []
+        final_message = ""
+        async for resp in response_gen:
+            delta = getattr(resp, "delta", None)
+            if delta:
+                chunks.append(delta)
+            msg = getattr(resp, "message", None)
+            if msg is not None and getattr(msg, "content", None):
+                final_message = msg.content
+        return ("".join(chunks) or final_message).strip()
+
+    last_err: BaseException | None = None
+    total_attempts = max_retries + 1
+    for attempt in range(1, total_attempts + 1):
+        try:
+            result = await asyncio.wait_for(_stream_collect(), timeout=timeout)
+            if not result:
+                raise ConversionError("Vision LLM 返回空内容")
+            return result
+        except asyncio.TimeoutError as e:
+            last_err = e
+            err_repr = f"timeout({timeout}s)"
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            err_repr = repr(e)
+
+        if attempt < total_attempts:
+            backoff = min(2 ** (attempt - 1), 10)
+            logger.warning(
+                "[VisionLLM] page %d call failed (attempt %d/%d, %s), retry in %ds",
+                page_num, attempt, total_attempts, err_repr, backoff,
+            )
+            await asyncio.sleep(backoff)
+        else:
+            logger.error(
+                "[VisionLLM] page %d call exhausted retries (%d attempts), last error: %s",
+                page_num, total_attempts, err_repr,
+            )
+
+    raise ConversionError(
+        f"Vision LLM 调用失败 (page {page_num}, {total_attempts} attempts): {last_err}"
+    )
 
 
 # ============================================================
