@@ -8,7 +8,7 @@ from .enums import (
     DocumentTypeCode,
     FeishuPublishStatus,
     LLMProviderType,
-    MessageRole,
+    MessageType,
     RetrievalMode,
     ReviewAction,
 )
@@ -56,7 +56,7 @@ class Document(BaseModel, TimestampMixin):
     content = fields.TextField(null=True, description="清洗后的文本内容")
     doc_type_code = fields.CharEnumField(DocumentTypeCode, default=DocumentTypeCode.FEISHU_DOC, description="文档类型编码")
     knowledge_base_id = fields.IntField(description="知识库ID -> knowledge_base.id")
-    status = fields.CharEnumField(DocumentStatus, default=DocumentStatus.PENDING_FETCH, description="处理状态")
+    status = fields.CharEnumField(DocumentStatus, default=DocumentStatus.PENDING_EXTRACT, description="处理状态")
     uploader_id = fields.IntField(description="上传者ID -> user.id")
     error_message = fields.TextField(null=True, description="错误信息")
     is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
@@ -65,10 +65,10 @@ class Document(BaseModel, TimestampMixin):
         table = "document"
 
 
-class StructuredResult(BaseModel, TimestampMixin):
+class SlicingResult(BaseModel, TimestampMixin):
     document_id = fields.IntField(unique=True, description="文档ID -> document.id")
-    structured_content = fields.TextField(description="结构化后的内容")
-    structuring_model_id = fields.IntField(description="结构化模型ID -> llm_provider_config.id")
+    sliced_content = fields.TextField(description="切片后的内容")
+    slicing_model_id = fields.IntField(description="切片模型ID -> llm_provider_config.id")
     prompt_used = fields.TextField(null=True, description="实际使用的提示词")
     token_usage = fields.JSONField(null=True, description="token消耗")
     processing_time_ms = fields.IntField(null=True, description="处理耗时(ms)")
@@ -76,7 +76,7 @@ class StructuredResult(BaseModel, TimestampMixin):
     feishu_publish_url = fields.CharField(max_length=1000, null=True, description="飞书文档URL")
 
     class Meta:
-        table = "structured_result"
+        table = "slicing_result"
 
 
 class ReviewRecord(BaseModel, TimestampMixin):
@@ -84,7 +84,6 @@ class ReviewRecord(BaseModel, TimestampMixin):
     reviewer_id = fields.IntField(description="审核人ID -> user.id", index=True)
     action = fields.CharEnumField(ReviewAction, description="审核动作")
     comment = fields.TextField(null=True, description="审核意见")
-    edited_content = fields.TextField(null=True, description="编辑后的内容")
 
     class Meta:
         table = "review_record"
@@ -146,7 +145,7 @@ class Conversation(BaseModel, TimestampMixin):
 
 class ChatMessage(BaseModel, TimestampMixin):
     conversation_id = fields.IntField(description="会话ID -> conversation.id", index=True)
-    role = fields.CharEnumField(MessageRole, description="消息角色")
+    type = fields.CharEnumField(MessageType, description="消息类型")
     content = fields.TextField(description="消息内容")
     retrieved_chunks = fields.JSONField(null=True, description="检索到的分块")
     token_count = fields.IntField(default=0, description="token消耗")

@@ -63,7 +63,6 @@ const pageList = computed(() => reviewDoc.value?.pages || [])
 const currentPageIndex = ref(0)
 const currentPageDetail = ref(null)
 const currentPageContent = ref('')
-const pageEdits = ref([]) // 收集所有页面的编辑内容
 const pagePreviewContainer = ref(null)
 
 async function openReviewDrawer(row) {
@@ -75,7 +74,6 @@ async function openReviewDrawer(row) {
   currentPageDetail.value = null
   currentPageContent.value = ''
   currentPageIndex.value = 0
-  pageEdits.value = []
   drawerContentLoading.value = true
   try {
     const [docRes, histRes] = await Promise.all([
@@ -104,11 +102,6 @@ async function loadReviewPageDetail(index) {
     const res = await api.getDocPageDetail({ doc_id: reviewDoc.value.id, page_number: page.page_number })
     currentPageDetail.value = res.data
     currentPageContent.value = res.data?.content || ''
-    // 检查 pageEdits 中是否已有该页编辑
-    const existingEdit = pageEdits.value.find((e) => e.page_number === page.page_number)
-    if (existingEdit) {
-      currentPageContent.value = existingEdit.content
-    }
     // 只读预览
     nextTick(() => {
       if (pagePreviewContainer.value && currentPageContent.value) {
@@ -123,17 +116,7 @@ async function loadReviewPageDetail(index) {
   }
 }
 
-// 保存当前页编辑到 pageEdits 缓存
-function saveCurrentPageEdit() {
-  if (!currentPageDetail.value) return
-  const pageNum = currentPageDetail.value.page_number
-  const idx = pageEdits.value.findIndex((e) => e.page_number === pageNum)
-  if (idx >= 0) {
-    pageEdits.value[idx].content = currentPageContent.value
-  } else {
-    pageEdits.value.push({ page_number: pageNum, content: currentPageContent.value })
-  }
-}
+// 审核仅提交 approve/reject，不提供内容修改能力
 
 async function handleApprove() {
   if (!reviewDoc.value) return
@@ -143,12 +126,6 @@ async function handleApprove() {
       document_id: reviewDoc.value.id,
       action: 'approve',
       comment: reviewComment.value || undefined,
-    }
-    // 如果是分页文档且有编辑内容，提交 page_edits
-    if (isPagedDoc.value && pageEdits.value.length > 0) {
-      // 保存当前页编辑（如果有）
-      saveCurrentPageEdit()
-      payload.page_edits = pageEdits.value
     }
     const res = await api.approveReview(payload)
     if (res.code === 0) {

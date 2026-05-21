@@ -65,9 +65,9 @@ const sourceTypeOptions = [
 ]
 
 const statusOptions = [
-  { label: '待抓取', value: 'pending_fetch' },
-  { label: '已抓取', value: 'fetched' },
-  { label: '结构化中', value: 'structuring' },
+  { label: '待提取', value: 'pending_extract' },
+  { label: '已提取', value: 'extracted' },
+  { label: '切片中', value: 'slicing' },
   { label: '待审核', value: 'pending_review' },
   { label: '已通过', value: 'approved' },
   { label: '向量化中', value: 'vectorizing' },
@@ -77,9 +77,9 @@ const statusOptions = [
 ]
 
 const statusColorMap = {
-  pending_fetch: 'default',
-  fetched: 'info',
-  structuring: 'warning',
+  pending_extract: 'default',
+  extracted: 'info',
+  slicing: 'warning',
   pending_review: 'warning',
   approved: 'success',
   vectorizing: 'info',

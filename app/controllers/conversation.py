@@ -14,7 +14,7 @@ class ConversationController(CRUDBase[Conversation, ChatRequest, ChatRequest]):
             await conv.save()
         return conv
 
-    async def get_messages(self, conversation_id: int, limit: int = 20):
+    async def get_messages(self, conversation_id: int, limit: int = 50):
         return await ChatMessage.filter(conversation_id=conversation_id).order_by("-created_at").limit(limit)
 
 

@@ -122,7 +122,7 @@ export default {
   updateDocChunk: (data = {}) => request.post('/doc_content/update', data),
   deleteDocChunk: (params = {}) => request.delete('/doc_content/delete', { params }),
   // Doc Pages (文档分页管理)
-  getDocPages: (params = {}) => request.get('/doc_pages/list', { params }),
-  getDocPageDetail: (params = {}) => request.get('/doc_pages/detail', { params }),
-  updateDocPageContent: (data = {}) => request.post('/doc_pages/update_content', data),
+  getDocPages: (params = {}) => request.get('/doc_page/list', { params }),
+  getDocPageDetail: (params = {}) => request.get('/doc_page/detail', { params }),
+  updateDocPageContent: (data = {}) => request.post('/doc_page/update_content', data),
 }

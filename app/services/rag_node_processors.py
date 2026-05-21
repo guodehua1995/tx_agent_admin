@@ -184,6 +184,7 @@ class ContextExpansionPostProcessor:
                     text=dp.content or "",
                     metadata={
                         "doc_id": doc_id,
+                        "page_id": dp.id,
                         "page_number": dp.page_number,
                         "doc_type_code": "ppt",
                         "screenshot_url": dp.screenshot_url,

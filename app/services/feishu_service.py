@@ -109,7 +109,7 @@ class FeishuService:
         }
 
     async def create_doc_in_folder(self, folder_token: str, title: str, content: str, access_token: str) -> str:
-        """将结构化结果发布到飞书云文档指定文件夹"""
+        """将切片结果发布到飞书云文档指定文件夹"""
         data = await self._post(
             "/docx/v1/documents",
             auth_token=access_token,
