@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     FEISHU_VERIFY_SSL: bool = True
 
     # Gotenberg 文档转换服务
-    GOTENBERG_URL: str = "http://localhost:3000"
+    GOTENBERG_URL: str = "http://localhost:3001"
 
     # 文件存储
     FILE_STORAGE_BACKEND: str = "local"
