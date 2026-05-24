@@ -53,9 +53,12 @@ class MultimodalEmbedding(BaseEmbedding):
     _dimensions: int = PrivateAttr(default=2560)
 
     def __init__(self, api_base: str, api_key: str, model_name: str, dimensions: int = 2560, **kwargs: Any):
-        super().__init__(model_name=model_name, **kwargs)
-        self.api_base = api_base.rstrip("/")
-        self.api_key = api_key
+        super().__init__(
+            model_name=model_name,
+            api_base=api_base.rstrip("/"),
+            api_key=api_key,
+            **kwargs,
+        )
         self._dimensions = dimensions
 
     def _build_payload(self, texts: List[str]) -> List[dict]:
