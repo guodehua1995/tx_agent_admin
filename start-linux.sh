@@ -60,10 +60,12 @@ do_start() {
     exit 0
   fi
 
-  # 加载环境变量
-  set -a
-  source "$ENV_FILE"
-  set +a
+  # 加载环境变量（逐行解析，避免 shell 解释 JSON 值）
+  while IFS= read -r line || [ -n "$line" ]; do
+    # 跳过空行和注释
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    export "$line"
+  done < "$ENV_FILE"
 
   source "$VENV_DIR/bin/activate"
 
