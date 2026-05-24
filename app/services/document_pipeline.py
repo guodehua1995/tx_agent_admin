@@ -69,17 +69,11 @@ class DocumentPipeline:
             await doc.save()
             logger.exception(f"Document processing failed: id={doc_id}")
 
-    async def _get_feishu_access_token(self) -> tuple:
+    async def _get_feishu_access_token(self) -> str:
         """获取飞书拉取机器人的 access_token 和 bot_config"""
-        global_config = await GlobalConfig.get(config_key="feishu_pull_bot")
-        if not global_config:
-            raise ValueError("没有配置飞书拉取机器人")
-        bot_configs = await feishu_bot_controller.get_by_app_id(app_id=global_config.config_value)
-        if not bot_configs:
-            raise ValueError("没有可用的飞书机器人配置")
-
-        access_token = await feishu_service.get_tenant_access_token(bot_configs.app_id, bot_configs.app_secret)
-        return access_token, bot_configs
+        # 
+        access_token = await feishu_service.get_tenant_access_token(settings.FEISHU_DOC_BOT_APPID, settings.FEISHU_DOC_BOT_APPSECRET)
+        return access_token
 
     async def _fetch_feishu_content(self, doc: Document) -> str:
         """从飞书拉取文档内容（根据解析出的 doc_type 路由）"""
@@ -87,7 +81,7 @@ class DocumentPipeline:
         feishu_url = meta.get("feishu_url", "")
         doc_token, doc_type = feishu_service.parse_feishu_url(feishu_url)
 
-        access_token, _ = await self._get_feishu_access_token()
+        access_token = await self._get_feishu_access_token()
 
         # file 类型：下载文件 → 文档转换器
         if doc_type == "file":
