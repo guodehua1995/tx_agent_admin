@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     FEISHU_BASE_URL: str = "https://open.feishu.cn/open-apis"
     FEISHU_STRUCTURED_FOLDER_TOKEN: str = ""
     FEISHU_VERIFY_SSL: bool = True
+    FEISHU_DOC_BOT_APPID: str = ""
+    FEISHU_DOC_BOT_APPSECRET: str = ""
+    
 
     # Gotenberg 文档转换服务
     GOTENBERG_URL: str = "http://localhost:3001"
