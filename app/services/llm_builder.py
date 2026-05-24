@@ -69,22 +69,23 @@ class MultimodalEmbedding(BaseEmbedding):
         """调用多模态 Embedding 接口"""
         embeddings = []
         async with httpx.AsyncClient(timeout=60) as client:
+            input = []
             for text in texts:
-                payload = {
-                    "model": self.model_name,
-                    "input": [{"type": "text", "text": text}],
-                }
-                resp = await client.post(
-                    self.api_base,
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                embeddings.append(data["data"][0]["embedding"])
+                input.append({"type": "text", "text": text})   
+
+            payload = {"model": self.model_name, "input": input}
+        
+            resp = await client.post(
+                self.api_base,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            embeddings.append(data["data"][0]["embedding"])
         return embeddings
 
     def _call_api_sync(self, texts: List[str]) -> List[List[float]]:
