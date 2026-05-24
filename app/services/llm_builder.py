@@ -66,47 +66,52 @@ class MultimodalEmbedding(BaseEmbedding):
         return [{"type": "text", "text": t} for t in texts]
 
     async def _call_api(self, texts: List[str]) -> List[List[float]]:
-        """调用多模态 Embedding 接口（批量）"""
+        """调用多模态 Embedding 接口（逐条发请求）
+
+        Ark 多模态接口响应格式:
+            {"created": ..., "data": {"embedding": [...]}}
+        """
+        embeddings = []
         async with httpx.AsyncClient(timeout=60) as client:
-            payload = {
-                "model": self.model_name,
-                "input": [{"type": "text", "text": t} for t in texts],
-            }
-            logger.info(f"[MultimodalEmbedding] request: {payload}")
-            resp = await client.post(
-                self.api_base,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            logger.info(f"[MultimodalEmbedding] response keys: {list(data.keys()) if isinstance(data, dict) else data}")
-            # data["data"] 按 index 排序，每个 item 对应一条输入的向量
-            items = sorted(data["data"], key=lambda x: x["index"])
-            return [item["embedding"] for item in items]
+            for text in texts:
+                payload = {
+                    "model": self.model_name,
+                    "input": [{"type": "text", "text": text}],
+                }
+                resp = await client.post(
+                    self.api_base,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                embeddings.append(data["data"]["embedding"])
+        return embeddings
 
     def _call_api_sync(self, texts: List[str]) -> List[List[float]]:
-        """同步调用多模态 Embedding 接口（批量）"""
+        """同步调用多模态 Embedding 接口（逐条发请求）"""
+        embeddings = []
         with httpx.Client(timeout=60) as client:
-            payload = {
-                "model": self.model_name,
-                "input": [{"type": "text", "text": t} for t in texts],
-            }
-            resp = client.post(
-                self.api_base,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            items = sorted(data["data"], key=lambda x: x["index"])
-            return [item["embedding"] for item in items]
+            for text in texts:
+                payload = {
+                    "model": self.model_name,
+                    "input": [{"type": "text", "text": text}],
+                }
+                resp = client.post(
+                    self.api_base,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                embeddings.append(data["data"]["embedding"])
+        return embeddings
 
     # ── llama_index BaseEmbedding 必须实现的方法 ──
 
