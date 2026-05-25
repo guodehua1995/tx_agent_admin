@@ -54,14 +54,13 @@ class DocToMarkdownAgent(BaseAgent):
 
         if not document_content:
             raise ValueError("document_content is required")
-        logger.info(f"Document Content: {document_content}")
-
+        logger.debug(f"Document Content: {document_content}")
         # 构建链
         chain = self.prompt | self.llm | StrOutputParser()
 
         # 执行
         markdown_content = await chain.ainvoke({"document_content": document_content})
-        logger.info(f"Markdown Content: {markdown_content}")
+        logger.debug(f"Markdown Content: {markdown_content}")
         return {
             "success": True,
             "markdown_content": markdown_content,

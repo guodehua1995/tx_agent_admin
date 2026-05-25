@@ -35,7 +35,7 @@ class FeishuDocExtractor(BaseExtractor):
                 "feishu_doc 类型仅处理 docx/wiki/sheet。"
             )
 
-        access_token, _ = await self._get_feishu_access_token()
+        access_token = await self._get_feishu_access_token()
         content = await feishu_service.fetch_document_content(doc_token, doc_type, access_token)
         agent_result = await agent_service.run_agent(
             "doc_to_markdown", {"document_content": content}
