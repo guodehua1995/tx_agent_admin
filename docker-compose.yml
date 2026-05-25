@@ -20,7 +20,7 @@ services:
     image: gotenberg/gotenberg:8
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - GOTENBERG_LOG_LEVEL=warn
 
@@ -48,22 +48,22 @@ services:
   # ---------------------------------------------------------------
   # 应用服务（前端 Nginx + 后端 FastAPI）
   # ---------------------------------------------------------------
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "${APP_PORT:-9999}:80"
-    depends_on:
-      - gotenberg
-    env_file:
-      - .env.docker
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - app_tmp:/tmp
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   ports:
+  #     - "${APP_PORT:-9999}:80"
+  #   depends_on:
+  #     - gotenberg
+  #   env_file:
+  #     - .env.docker
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   volumes:
+  #     - app_tmp:/tmp
 
 volumes:
   pgdata:
-  app_tmp:
+  # app_tmp:
