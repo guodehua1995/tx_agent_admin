@@ -79,7 +79,7 @@ class Settings(BaseSettings):
 
     # LlamaIndex / RAG
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
-    DEFAULT_EMBEDDING_DIMENSION: int = 1536
+    DEFAULT_EMBEDDING_DIMENSION: int = 2048
 
     # LangChain / LLM
     LLM_PROVIDER: str = "openai"

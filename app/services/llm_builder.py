@@ -152,7 +152,7 @@ def build_embed_model(config: LLMProviderConfig):
             api_base=config.api_base_url,
             api_key=config.api_key,
             model_name=config.model_name,
-            dimensions=config.embedding_dimension or settings.DEFAULT_EMBEDDING_DIMENSION,
+            dimensions=settings.DEFAULT_EMBEDDING_DIMENSION,
         )
 
     from llama_index.embeddings.openai import OpenAIEmbedding

@@ -33,6 +33,9 @@ class AgentExecutor:
                 base_url=self.config.llm.base_url,
                 temperature=self.config.llm.temperature,
                 max_tokens=self.config.llm.max_tokens,
+                # Qwen3 系列模型默认开启思考模式，响应内容在 reasoning_content 中，
+                # 导致 content 字段为空。此处显式关闭思考模式。
+                extra_body={"enable_thinking": False},
             )
         # 可扩展其他 provider
         raise ValueError(f"Unsupported LLM provider: {self.config.llm.provider}")

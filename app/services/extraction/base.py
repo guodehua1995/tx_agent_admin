@@ -10,6 +10,8 @@ from app.models.enums import DocumentSourceType
 from app.models.global_config import GlobalConfig
 from app.models.rag import Document, DocumentPage
 from app.services.feishu_service import feishu_service
+from app.settings import settings
+
 
 from . import ExtractionResult
 
@@ -29,18 +31,12 @@ class BaseExtractor:
 
     # ---------- 来源字节获取（按 source_type 复用） ----------
 
-    async def _get_feishu_access_token(self) -> tuple:
+    async def _get_feishu_access_token(self) -> str:
         """获取飞书拉取机器人的 access_token 与 bot_config"""
-        global_config = await GlobalConfig.get(config_key="feishu_pull_bot")
-        if not global_config:
-            raise ValueError("没有配置飞书拉取机器人")
-        bot_configs = await feishu_bot_controller.get_by_app_id(app_id=global_config.config_value)
-        if not bot_configs:
-            raise ValueError("没有可用的飞书机器人配置")
         access_token = await feishu_service.get_tenant_access_token(
-            bot_configs.app_id, bot_configs.app_secret
+            settings.FEISHU_DOC_BOT_APPID, settings.FEISHU_DOC_BOT_APPSECRET
         )
-        return access_token, bot_configs
+        return access_token
 
     async def _fetch_file_bytes(self, doc: Document) -> tuple[bytes, str, str]:
         """统一从来源拿文件字节。
@@ -65,7 +61,7 @@ class BaseExtractor:
                     f"该文档类型需要文件来源，但飞书 URL 指向 {doc_type}。"
                     "请改用飞书 file 链接或 file_upload 来源。"
                 )
-            access_token, _ = await self._get_feishu_access_token()
+            access_token = await self._get_feishu_access_token()
             file_bytes, filename = await feishu_service.download_file(doc_token, access_token)
             ext = Path(filename).suffix.lstrip(".").lower()
             logger.info(f"Feishu file downloaded: token={doc_token}, filename={filename}, size={len(file_bytes)}")
