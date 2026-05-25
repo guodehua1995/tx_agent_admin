@@ -387,7 +387,7 @@ class RAGService:
                 await llm.acomplete("Hello")
             return True
         except Exception as e:
-            logger.error(f"Model connection test failed: {e}")
+            logger.exception(f"Model connection test failed: {e}")
             return False
 
 

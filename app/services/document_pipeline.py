@@ -57,6 +57,156 @@ class DocumentPipeline:
             logger.exception(f"Document extraction failed: id={doc_id}")
 
     # ==================== 阶段二：审核后：切片 + 向量化 ====================
+            logger.exception(f"Document processing failed: id={doc_id}")
+
+    async def _get_feishu_access_token(self) -> str:
+        """获取飞书拉取机器人的 access_token 和 bot_config"""
+        # 
+        access_token = await feishu_service.get_tenant_access_token(settings.FEISHU_DOC_BOT_APPID, settings.FEISHU_DOC_BOT_APPSECRET)
+        return access_token
+
+    async def _fetch_feishu_content(self, doc: Document) -> str:
+        """从飞书拉取文档内容（根据解析出的 doc_type 路由）"""
+        meta = doc.source_meta or {}
+        feishu_url = meta.get("feishu_url", "")
+        doc_token, doc_type = feishu_service.parse_feishu_url(feishu_url)
+
+        access_token = await self._get_feishu_access_token()
+
+        # file 类型：下载文件 → 文档转换器
+        if doc_type == "file":
+            return await self._process_feishu_file(doc, doc_token, access_token)
+
+        # slide 类型：下载文件 → 文档转换器（slide 不支持 export，但如果是 /file/ 格式就走上面）
+        # 注意：/slides/ URL 的 export API 已不可用，标记为失败
+        if doc_type == "slide":
+            raise ValueError(
+                "飞书云文档PPT(slides类型)不支持通过API导出。"
+                "请使用飞书文件格式的链接(https://xxx.feishu.cn/file/xxx)"
+            )
+
+        # docx/wiki/sheet 类型：走原有 API 拉取内容
+        content = await feishu_service.fetch_document_content(doc_token, doc_type, access_token)
+        agent_content = await agent_service.run_agent("doc_to_markdown", {"document_content": content})
+        doc.source_meta = {**meta, "feishu_doc_token": doc_token, "feishu_doc_type": doc_type}
+        if not agent_content["success"]:
+            raise ValueError("Agent execution failed: agent_name=doc_to_markdown")
+        return agent_content["markdown_content"]
+
+    async def _process_feishu_file(self, doc: Document, file_token: str, access_token: str) -> str:
+        """处理飞书 file 类型：下载文件 → 文档转换器 → Markdown"""
+        meta = doc.source_meta or {}
+
+        # 下载文件
+        file_bytes, filename = await feishu_service.download_file(file_token, access_token)
+        logger.info(f"Feishu file downloaded: token={file_token}, filename={filename}, size={len(file_bytes)}")
+
+        # 从文件名提取扩展名
+        ext = Path(filename).suffix.lstrip(".").lower()
+        if not ext or ext not in CONVERTIBLE_EXTENSIONS:
+            raise ValueError(f"不支持的文件类型: {filename} (扩展名: {ext})")
+
+        # 调用文档转换器
+        pages = await document_converter.convert(file_bytes, ext, filename)
+
+        # 保存页面截图和页记录（若有 image_bytes）
+        await self._save_page_records(doc, pages)
+
+        markdown_content = document_converter.pages_to_markdown(pages)
+
+        # 更新元数据
+        doc.source_meta = {
+            **meta,
+            "feishu_file_token": file_token,
+            "filename": filename,
+            "file_type": ext,
+            "page_count": len(pages),
+        }
+
+        return markdown_content
+
+    async def _process_uploaded_file(self, doc: Document) -> str:
+        """处理上传的文件：读取 → 文档转换器 → Markdown"""
+        meta = doc.source_meta or {}
+        file_path = meta.get("file_path", "")
+        if not file_path:
+            raise ValueError("文件路径为空")
+
+        ext = Path(file_path).suffix.lstrip(".").lower()
+
+        # 如果是文档转换器支持的类型，走转换器
+        if ext in CONVERTIBLE_EXTENSIONS:
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            filename = Path(file_path).name
+            pages = await document_converter.convert(file_bytes, ext, filename)
+            await self._save_page_records(doc, pages)
+            markdown_content = document_converter.pages_to_markdown(pages)
+           
+            doc_token, doc_type = feishu_service.parse_feishu_url(file_path)
+            doc.source_meta = {**meta,"feishu_doc_token": doc_token, "feishu_doc_type": doc_type, "file_type": ext, "page_count": len(pages)}
+            return markdown_content
+
+        # 其他类型尝试作为纯文本读取
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+
+    async def _save_page_records(self, doc: Document, pages):
+        """保存页面截图并创建 DocumentPage 记录"""
+        from app.services.file_storage import file_storage
+
+        has_images = any(getattr(p, "image_bytes", None) for p in pages)
+        if not has_images and len(pages) <= 1:
+            return
+
+        for page in pages:
+            screenshot_url = None
+            if page.image_bytes:
+                path = f"pages/doc_{doc.id}/page_{page.page_number}.png"
+                screenshot_url = await file_storage.save(path, page.image_bytes)
+
+            await DocumentPage.create(
+                document_id=doc.id,
+                page_number=page.page_number,
+                total_pages=page.total_pages,
+                content=page.content,
+                screenshot_url=screenshot_url,
+            )
+
+        logger.info(f"Page records saved: doc_id={doc.id}, pages={len(pages)}")
+
+    async def _fetch_web_content(self, doc: Document) -> str:
+        """抓取网页内容"""
+        import httpx
+
+        meta = doc.source_meta or {}
+        url = meta.get("url", "")
+        if not url:
+            raise ValueError("URL 为空")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, follow_redirects=True)
+            return resp.text
+
+    async def _run_structuring(self, doc: Document):
+        """执行结构化处理"""
+        chat_models = await ai_config_controller.get_active_chat_models()
+        if not chat_models:
+            raise ValueError("没有可用的 Chat 模型配置")
+        model_config = chat_models[0]
+
+        start_time = time.time()
+        result = await run_structuring(doc.doc_type_code, doc.content, model_config)
+        elapsed_ms = int((time.time() - start_time) * 1000)
+
+        await StructuredResult.create(
+            document_id=doc.id,
+            structured_content=result.content,
+            structuring_model_id=model_config.id,
+            prompt_used=result.prompt_used,
+            token_usage=result.token_usage,
+            processing_time_ms=elapsed_ms,
+        )
 
     async def vectorize_document(self, doc_id: int):
         """审核通过后: 切片（如需要）→ 向量化入库"""
