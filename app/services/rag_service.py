@@ -6,6 +6,7 @@ from typing import Optional
 from llama_index.core import VectorStoreIndex
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 
+from app import log
 from app.log import logger
 from app.models.rag import Document, KnowledgeBase, LLMProviderConfig,DocumentPage
 from app.services.llm_builder import build_embed_model, build_llm
@@ -206,30 +207,11 @@ class RAGService:
         limited_history = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
         chat_history = []
         for msg in limited_history:
-            msg_type = msg.get("type") or msg.get("role", "user")
+            role = msg.get("type") or msg.get("role", "user")
+            if role not in ("user", "assistant"):
+                role = "assistant"
             content = str(msg["content"])
-            if msg_type == "user":
-                chat_history.append(LlamaChatMessage(role="user", content=content))
-            elif msg_type == "assistant":
-                chat_history.append(LlamaChatMessage(role="assistant", content=content))
-            elif msg_type == "tool_call":
-                # 工具调用映射为 assistant （含调用信息）
-                try:
-                    data = json.loads(content)
-                    call_desc = f"[调用工具: {data['tool_name']}] {data.get('tool_input', '')}"
-                except (json.JSONDecodeError, KeyError):
-                    call_desc = content
-                chat_history.append(LlamaChatMessage(role="assistant", content=call_desc))
-            elif msg_type == "tool_call_result":
-                # 工具结果映射为 tool 角色
-                try:
-                    data = json.loads(content)
-                    result_text = data.get("result", content)
-                except (json.JSONDecodeError, KeyError):
-                    result_text = content
-                chat_history.append(LlamaChatMessage(role="tool", content=result_text))
-            else:
-                chat_history.append(LlamaChatMessage(role="assistant", content=content))
+            chat_history.append(LlamaChatMessage(role=role, content=content))
 
         agent_prompt = (
             system_prompt
@@ -358,13 +340,14 @@ class RAGService:
             # 收集工具调用数据
             tool_calls_data = []
             for tc in response.tool_calls:
+                logger.debug(f"tool call result: {tc}")
                 try:
                     tool_output_text = tc.tool_output.blocks[0].text if tc.tool_output else ""
                 except (IndexError, AttributeError):
                     tool_output_text = ""
                 tool_calls_data.append({
                     "tool_name": tc.tool_name,
-                    "tool_input": str(tc.tool_input),
+                    "tool_input": tc.tool_kwargs,
                     "tool_output": tool_output_text,
                 })
             yield {"type": "tool_calls", "content": tool_calls_data}

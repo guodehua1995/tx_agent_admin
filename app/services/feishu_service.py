@@ -83,7 +83,35 @@ class FeishuService:
         )
 
     async def build_answer_card(self, answer: str, sources: list) -> dict:
-        """构建消息卡片"""
+        """构建消息卡片
+
+        飞书卡片 markdown 标签支持的格式：
+        - **粗体**
+        - *斜体*
+        - ~~删除线~~
+        - [链接](url)
+        - 无序列表 (- )
+        - 有序列表 (1. )
+        - 代码块
+        - > 引用
+
+        不支持 # 标题，需要用其他方式处理
+        """
+        # 处理标题：将 # 转为加粗文本
+        import re
+        def convert_heading(match):
+            level = len(match.group(1))
+            text = match.group(2).strip()
+            if level == 1:
+                return f"**{text}**"
+            elif level == 2:
+                return f"**{text}**"
+            else:  # level >= 3
+                return f"*{text}*"
+
+        # 将 # 标题转换为加粗文本
+        answer = re.sub(r'^(#{1,3})\s+(.+)$', convert_heading, answer, flags=re.MULTILINE)
+
         source_elements = ""
         for i, src in enumerate(sources[:3], 1):
             metadata = src.get("metadata", {})
@@ -92,20 +120,19 @@ class FeishuService:
                 title = metadata.get("title", "未知来源")
                 url = metadata.get("url")
                 source_elements += f"[{title}]({url})\n"
-            
-        
-        elemsnts = [
-                {"tag": "div", "text": {"tag": "lark_md", "content": answer}},
+
+        elements = [
+            {"tag": "markdown", "content": answer},
         ]
         if source_elements:
-            elemsnts.extend([
+            elements.extend([
                 {"tag": "hr"},
-                {"tag": "div", "text": {"tag": "lark_md", "content": "参考来源:\n" + source_elements}},
+                {"tag": "markdown", "content": "**参考来源:**\n" + source_elements},
             ])
 
         return {
             "config": {"wide_screen_mode": True},
-            "elements":elemsnts,
+            "elements": elements,
         }
 
     async def create_doc_in_folder(self, folder_token: str, title: str, content: str, access_token: str) -> str:

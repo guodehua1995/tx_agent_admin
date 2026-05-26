@@ -100,10 +100,9 @@ async def chat_with_agent(chat_in: ChatRequest):
 
     conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
 
-    recent_messages = await conversation_controller.get_messages(
-        conv.id, limit=agent.max_history_turns * 2
+    history = await conversation_controller.get_messages(
+        conv.id, limit=agent.max_history_turns * 2, agent_friendly=True
     )
-    history = [{"type": msg.type, "content": msg.content} for msg in reversed(list(recent_messages))]
 
     chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
 
@@ -176,10 +175,9 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
 
     conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
 
-    recent_messages = await conversation_controller.get_messages(
-        conv.id, limit=agent.max_history_turns * 2
+    history = await conversation_controller.get_messages(
+        conv.id, limit=agent.max_history_turns * 2, agent_friendly=True
     )
-    history = [{"type": msg.type, "content": msg.content} for msg in reversed(list(recent_messages))]
 
     chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
 

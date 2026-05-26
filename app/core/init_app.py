@@ -331,10 +331,18 @@ async def init_vector_store():
     注意：PGVectorStore(perform_setup=True) 会自动创建名为 data_<VECTOR_STORE_TABLE_NAME>
     的实际数据表（含 embedding 列、text_search_tsv 等），无需在此手动建表。
     """
+    from tortoise import Tortoise
     from app.services.rag_service import rag_service
 
     try:
         await rag_service.init_vector_store()
+
+        # 为 metadata 中的 knowledge_base_id 创建索引，加速按知识库过滤查询
+        conn = Tortoise.get_connection("postgres")
+        table = f"data_{settings.VECTOR_STORE_TABLE_NAME}"
+        await conn.execute_query(
+            f'CREATE INDEX IF NOT EXISTS idx_kb_id ON {table} ((metadata_->>\'knowledge_base_id\'));'
+        )
     except Exception as e:
         logger.warning(f"Vector store initialization skipped: {e}")
 

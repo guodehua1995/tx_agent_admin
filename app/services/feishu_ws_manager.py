@@ -118,9 +118,14 @@ class FeishuBotClientManager:
                 logger.exception(f"[FeishuWS] 消息处理异常: bot={bot.name}", e)
 
         # 构建事件处理器
+        # 空处理已读消息事件，防止 keepalive ping timeout
+        def on_message_read(data) -> None:
+            pass  # 已读事件无需处理，仅用于维持连接活跃
+
         event_handler = (
             lark.EventDispatcherHandler.builder(bot.verification_token or "", bot.encrypt_key or "")
             .register_p2_im_message_receive_v1(on_message)
+            .register_p2_im_message_message_read_v1(on_message_read)
             .build()
         )
 
@@ -130,6 +135,7 @@ class FeishuBotClientManager:
             app_secret=bot.app_secret,
             event_handler=event_handler,
             log_level=lark.LogLevel.ERROR,
+            auto_reconnect=True,  # 断线自动重连
         )
 
     
@@ -180,7 +186,7 @@ class FeishuBotClientManager:
             )
             logger.info(f"[FeishuWS] 已回复: bot_id={bot_id}, chat_id={chat_id}")
         except ValueError as e:
-            logger.error(f"[FeishuWS] 处理消息失败: bot_id={bot_id}", e)
+            logger.error(f"[FeishuWS] 处理消息失败: bot_id={bot_id}: {e}")
             await self._feishu_service.send_message(
                 app_id=bot.app_id,
                 app_secret=bot.app_secret,
