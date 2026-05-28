@@ -1,11 +1,12 @@
 """合同文档切片处理器
 
-合同向量化前的三步切片预处理（三个 LLM 任务彼此独立，避免 prompt 混合）：
+合同向量化前的切片预处理（各 LLM 任务彼此独立，避免 prompt 混合）：
 
 1. 元信息提取（独立 1 次调用）：取合同前 N 页 + 后 N 页的文本，提取 party_a / party_b / contract_type；
 2. 条款结构分析（滑动窗口 N 次 + 必要时兜底 LLM 调用）：每轮 5000 字，LLM 仅输出 marker，
    代码 find() 切分；定位失败的 marker 把所属 chunk 再送 LLM 让其逐字复制完整原文作为兜底；
-3. 概要生成（独立 1 次调用）：基于元信息 + 前若干条款生成合同概要，作为 clause_index=0 入库。
+3. 明细数据摘要化（按条款逐个处理）：对含大段表格/清单的条款，LLM 将明细数据替换为简短描述；
+4. 概要生成（独立 1 次调用）：基于元信息 + 前若干条款生成合同概要，作为 clause_index=0 入库。
 """
 
 from __future__ import annotations
@@ -44,6 +45,12 @@ STRUCTURE_PROMPT = """你是合同解析助手。分析以下合同片段，按�
 
 返回 JSON（不要包裹代码块，不要任何额外说明）：
 {"clause_markers": [{"title": "条款主题", "marker": "原文中该条款的起始 20~40 字原文"}]}
+
+# 上一窗口末尾条款（跨页上下文）
+{last_top_clause}
+
+如果当前片段中的条款属于上述条款的延续内容（同一主条款继续到新页面），请在 title 中体现继承关系，按层级拼接完整 title。
+例如：上一窗口最后条款为"合作范围-服务内容-软件开发"，本片段继续列出软件开发下的子项，title 仍应包含"合作范围-服务内容-软件开发"前缀。
 
 # 切分颗粒度要求（重要）
 marker 应放在**含有具体内容的最低条款层级**的起始位置，避免过粗（一整个章节作为一个 marker）也避免过碎（每行子项都加 marker）。
@@ -91,6 +98,14 @@ RECOVER_PROMPT = """你是合同解析助手。以下合同片段中包含一个
 3. 如果片段中确实找不到该条款，content 字段填空字符串。"""
 
 
+DATA_SUMMARIZE_PROMPT = """你是合同解析助手。以下条款中包含大量具体数据明细（如价格表、人员名单、物料清单、工时明细等）。
+请将条款中所有明细数据（表格、列表、数据清单等）替换为一段简短描述（50字以内），说明数据类型、用途及关键汇总信息（如有）。
+保留条款中的正文约定不变，仅替换数据部分。
+
+返回 JSON（不要包裹代码块，不要任何额外说明）：
+{"content": "处理后的条款文本（明细数据已替换为摘要描述）"}"""
+
+
 SUMMARY_PROMPT = """你是合同解析助手。基于以下合同元信息和主要条款，用 200~400 字总结合同的核心约定，
 包括：当事人、合同类型、核心标的、关键义务、主要金额（如有）、争议解决方式。
 直接输出概要正文，不要标题和前置说明。"""
@@ -119,32 +134,35 @@ class ContractSlicingHandler(BaseSlicingHandler):
     ) -> SlicingResult:
         # 重置 warning 收集器（handler 实例可能被复用）
         self._processing_warnings = []
-
+        logger.debug("[contract] slicing started")
         # 1. 元信息提取（独立 1 次调用，输入仅前后 N 页）
         meta = await self._extract_meta(raw_content, pages)
-
+        logger.debug("[contract] meta extraction completed")
         # 2. 滑动窗口分析条款结构（N 次调用 → markers 列表）
         markers = await self._analyze_structure(raw_content)
-
+        logger.debug("[contract] structure analysis completed")
         # 3. 按 marker 在原文中定位并切分，定位失败项走 LLM 兜底补取
         clauses = await self._split_by_markers(raw_content, markers)
         if not clauses:
             # 兜底：LLM 未能识别任何条款，整篇作为单一条款
             self._processing_warnings.append("未识别出任何条款，整篇作为单一条款入库")
             clauses = [{"clause_title": None, "content": raw_content.strip()}]
-
+        logger.debug("[contract] clause splitting completed")
+        # 4. 明细数据摘要化：将条款中的大段表格/清单数据替换为简短描述
+        clauses = await self._summarize_data_in_clauses(clauses)
+        logger.debug("[contract] data summarization completed")
         # 统一按顺序编号（从 1 开始，0 留给概要）
         for i, c in enumerate(clauses, start=1):
             c["clause_index"] = i
-
-        # 4. 生成合同概要（独立 1 次调用，作为第 0 条入库）
+        logger.debug("[contract] clause numbering completed")
+        # 5. 生成合同概要（独立 1 次调用，作为第 0 条入库）
         summary = await self._generate_summary(meta, clauses)
         all_clauses = [{
             "clause_index": 0,
             "clause_title": "合同概要",
             "content": summary,
         }] + clauses
-
+        logger.debug("[contract] summary generation completed")
         result_data: dict = {"meta": meta, "clauses": all_clauses}
         if self._processing_warnings:
             result_data["processing_warnings"] = list(self._processing_warnings)
@@ -152,7 +170,7 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 "[contract] slicing completed with %d warnings",
                 len(self._processing_warnings),
             )
-
+        logger.debug("[contract] slicing completed")
         result = json.dumps(result_data, ensure_ascii=False)
         return SlicingResult(content=result, prompt_used="contract_v2")
 
@@ -212,14 +230,23 @@ class ContractSlicingHandler(BaseSlicingHandler):
         cursor = 0
         all_markers: list[dict] = []
         seen_markers: set[str] = set()
+        last_top_clause: Optional[str] = None  # 上一窗口最后一个 keep marker 的完整 title
 
         while cursor < len(text):
             chunk = text[cursor : cursor + WINDOW_SIZE]
             chunk_end = cursor + len(chunk)
             is_last_window = cursor + WINDOW_SIZE >= len(text)
 
+            # 构建 prompt：注入跨页上下文
+            context_value = (
+                f"上一窗口最后条款：{last_top_clause}"
+                if last_top_clause
+                else "（无，这是第一个窗口）"
+            )
+            prompt = STRUCTURE_PROMPT.replace("{last_top_clause}", context_value)
+
             try:
-                raw = await self.call_llm(STRUCTURE_PROMPT, chunk)
+                raw = await self.call_llm(prompt, chunk)
                 result = json.loads(_extract_json(raw))
                 markers = result.get("clause_markers", []) or []
             except LLMCallError as e:
@@ -251,6 +278,10 @@ class ContractSlicingHandler(BaseSlicingHandler):
             keep = markers if is_last_window else markers[:-1]
             for m in keep:
                 self._append_marker(all_markers, seen_markers, m, cursor, chunk_end)
+
+            # 更新跨页上下文：取本轮 keep 列表最后一个 marker 的完整 title
+            if keep:
+                last_top_clause = (keep[-1].get("title") or "").strip() or None
 
             if is_last_window:
                 break
@@ -385,6 +416,49 @@ class ContractSlicingHandler(BaseSlicingHandler):
         if content[:20] not in chunk:
             return None
         return content
+
+    # ---------- 明细数据摘要化 ----------
+
+    # 检测明细数据特征的正则：markdown 表格、有序/无序列表、多行连续枚举等
+    _DATA_PATTERN = re.compile(
+        r'(?:^\s*\|.*\|)'          # markdown 表格行
+        r'|(?:^\s*[-*]\s+.+)'      # 无序列表项
+        r'|(?:^\s*\d+[.)\s].+)'    # 有序列表项（数字开头）
+        r'|(?:^\s*[a-zA-Z][.)]\s+.+)',  # 字母列表项
+        re.MULTILINE,
+    )
+
+    async def _summarize_data_in_clauses(self, clauses: list[dict]) -> list[dict]:
+        """对含大段明细数据的条款调用 LLM，将表格/清单替换为简短摘要描述。
+
+        仅当条款内容 ≥ 800 字且包含列表/表格特征时才调用 LLM，否则保持原内容不变。
+        """
+        for clause in clauses:
+            content = clause.get("content") or ""
+            if len(content) < 800:
+                continue
+            if not self._DATA_PATTERN.search(content):
+                continue
+
+            try:
+                raw = await self.call_llm(DATA_SUMMARIZE_PROMPT, content)
+                data = json.loads(_extract_json(raw))
+                new_content = (data.get("content") or "").strip()
+                if new_content and len(new_content) < len(content):
+                    clause["content"] = new_content
+                    logger.info(
+                        "[contract] data summarized: clause=%s, %d -> %d chars",
+                        clause.get("clause_title"), len(content), len(new_content),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "[contract] data summarize failed for clause=%s: %s",
+                    clause.get("clause_title"), e,
+                )
+                self._processing_warnings.append(
+                    f"条款「{clause.get('clause_title') or ''}」明细数据摘要失败，保留原文: {e}"
+                )
+        return clauses
 
     # ---------- 概要 ----------
 
