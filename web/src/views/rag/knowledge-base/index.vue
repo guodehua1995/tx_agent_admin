@@ -52,6 +52,7 @@ const {
     chunk_overlap: 50,
     similarity_top_k: 5,
     similarity_threshold: 0.5,
+    context_chunks_window: 0,
   },
   doCreate: api.createKnowledgeBase,
   doDelete: api.deleteKnowledgeBase,
@@ -130,6 +131,16 @@ const columns = [
     key: 'similarity_top_k',
     width: 80,
     align: 'center',
+  },
+  {
+    title: '关联召回',
+    key: 'context_chunks_window',
+    width: 90,
+    align: 'center',
+    render(row) {
+      const v = row.context_chunks_window || 0
+      return h('span', v > 0 ? `±${v}` : '-')
+    },
   },
   {
     title: '状态',
@@ -324,6 +335,19 @@ const columns = [
             :step="0.1"
             style="width: 100%"
           />
+        </NFormItem>
+        <NFormItem label="关联召回" path="context_chunks_window">
+          <NInputNumber
+            v-model:value="modalForm.context_chunks_window"
+            :min="0"
+            :max="5"
+            style="width: 100%"
+          />
+          <template #feedback>
+            <span style="color: var(--n-text-color-3, #999); font-size: 12px">
+              命中 chunk 后，关联召回同文档前后各 N 个 chunk（0 表示不扩展）
+            </span>
+          </template>
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />
