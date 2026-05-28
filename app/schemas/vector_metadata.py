@@ -10,7 +10,7 @@
     from app.schemas.vector_metadata import BaseVectorMetadata, PagedDocumentMetadata
 
     # 普通文档
-    meta = BaseVectorMetadata(title=..., source_type=..., knowledge_base_id=..., doc_id=..., doc_type_code=...)
+    meta = BaseVectorMetadata(title=..., source_type=..., knowledge_base_id=..., source_doc_id=..., doc_type_code=...)
     await rag_service.ingest_document(..., metadata=meta.to_dict())
 
     # 分页文档
@@ -31,7 +31,7 @@ class BaseVectorMetadata(BaseModel):
     title: str = Field(..., description="文档标题")
     source_type: str = Field(..., description="来源类型: feishu_doc / upload / url")
     knowledge_base_id: str = Field(..., description="所属知识库ID")
-    doc_id: str = Field(..., description="文档ID")
+    source_doc_id: str = Field(..., description="文档ID（对应 Document 表主键，LlamaIndex 会覆盖 doc_id/document_id/ref_doc_id，故用此字段）")
     doc_type_code: str = Field(..., description="文档类型编码: feishu_doc / ppt / contract 等")
 
     # ── 可选通用字段 ──

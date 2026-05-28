@@ -47,6 +47,12 @@ class RAGService:
             embed_dim=settings.DEFAULT_EMBEDDING_DIMENSION,
             hybrid_search=True,
             perform_setup=True,
+            create_engine_kwargs={
+                "pool_pre_ping": True,       # 使用前检测连接是否存活
+                "pool_recycle": 1800,        # 每30分钟回收连接，避免服务器端超时
+                "pool_size": 5,              # 连接池大小
+                "max_overflow": 10,          # 超出 pool_size 时允许临时连接
+            },
         )
         logger.info(f"PGVectorStore initialized: table={settings.VECTOR_STORE_TABLE_NAME}")
 
@@ -91,7 +97,7 @@ class RAGService:
         node_parser = self._build_node_parser(kb)
 
         # 确保必要字段存在，通过 BaseVectorMetadata 校验
-        metadata.update({"knowledge_base_id": str(kb.id), "doc_id": doc_id})
+        metadata.update({"knowledge_base_id": str(kb.id), "source_doc_id": doc_id})
         validated = BaseVectorMetadata(**metadata)
         llama_doc = LlamaDocument(text=content, metadata=validated.to_dict(), doc_id=doc_id)
 
@@ -103,10 +109,24 @@ class RAGService:
         logger.info(f"Document ingested: doc_id={doc_id}, kb={kb.name}")
 
     async def delete_document(self, doc_id: str):
-        """删除文档的所有向量"""
-        if self._vector_store:
-            await self._vector_store.adelete(doc_id)
+        """删除文档的所有向量（按 metadata_.source_doc_id 匹配删除）"""
+        if not self._vector_store:
+            logger.warning(f"Vector store not initialized, skip deleting vectors for doc_id={doc_id}")
+            return
+        try:
+            # 按新字段 source_doc_id 删除（新入库的数据）
+            filters = MetadataFilters(
+                filters=[ExactMatchFilter(key="source_doc_id", value=doc_id)]
+            )
+            await self._vector_store.adelete_nodes(filters=filters)
+            # 兼容旧数据：旧数据中 LlamaIndex 覆盖的 doc_id 对普通文档仍然有效
+            filters_legacy = MetadataFilters(
+                filters=[ExactMatchFilter(key="doc_id", value=doc_id)]
+            )
+            await self._vector_store.adelete_nodes(filters=filters_legacy)
             logger.info(f"Document vectors deleted: doc_id={doc_id}")
+        except Exception:
+            logger.exception(f"Failed to delete vectors for doc_id={doc_id}")
 
     async def delete_by_knowledge_base(self, kb_id: int):
         """删除知识库所有向量"""
@@ -242,7 +262,7 @@ class RAGService:
                 tool_result = json.loads(tool_call.tool_output.blocks[0].text)
                 for item in tool_result:
                     if isinstance(item, dict):
-                        doc_id = item.get("metadata", {}).get("doc_id")
+                        doc_id = item.get("metadata", {}).get("source_doc_id")
                         page_id = item.get("metadata", {}).get("page_id")
                         if doc_id:
                             doc_ids.add(int(doc_id))

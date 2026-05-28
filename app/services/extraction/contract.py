@@ -18,7 +18,11 @@ class ContractExtractor(BaseExtractor):
 
         pages = await document_converter.convert(file_bytes, ext, filename)
         await self._save_page_records(doc, pages)
+
         markdown_content = document_converter.pages_to_markdown(pages)
+
+        # 将文件名添加到最上方
+        markdown_content = f"# 文件名: {filename}\n\n" + markdown_content
 
         return ExtractionResult(
             content=markdown_content,

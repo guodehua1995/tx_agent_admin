@@ -384,19 +384,8 @@ const columns = [
                       />
                     </div>
                     <NCard size="small" :title="`第 ${currentPageDetail?.page_number || '-'} 页内容`">
-                      <NInput
-                        v-if="reviewDoc.status === 'pending_review'"
-                        v-model:value="currentPageContent"
-                        type="textarea"
-                        :rows="10"
-                        placeholder="暂无页面内容"
-                        style="font-family: monospace"
-                        @blur="saveCurrentPageEdit"
-                      />
-                      <template v-else>
-                        <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" />
-                        <NEmpty v-else description="暂无页面内容" />
-                      </template>
+                      <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" style="background: #fff; padding: 12px; border-radius: 4px;" />
+                      <NEmpty v-else description="暂无页面内容" />
                     </NCard>
                   </div>
                 </div>

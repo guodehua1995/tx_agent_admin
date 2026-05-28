@@ -44,8 +44,10 @@ async def get_review_detail(document_id: int = Query(..., description="文档ID"
     reviews = await review_controller.get_by_document(document_id)
     doc_dict["review_history"] = [await r.to_dict() for r in reviews]
 
-    # 附加分页数据（含内容和截图）
-    pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values()
+    # 附加分页摘要（仅返回必要字段，避免传输大量内容）
+    pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values(
+        "id", "page_number", "total_pages", "screenshot_url"
+    )
     doc_dict["pages"] = list(pages)
 
     return Success(data=doc_dict)

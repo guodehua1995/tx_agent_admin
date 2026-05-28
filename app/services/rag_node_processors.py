@@ -115,7 +115,7 @@ class ContextExpansionPostProcessor:
         seen_pages: set[tuple[str, int]] = set()
         for n in nodes:
             meta = n.node.metadata
-            doc_id = meta.get("doc_id")
+            doc_id = meta.get("source_doc_id")
             pn = meta.get("page_number")
             if doc_id is not None and pn is not None:
                 seen_pages.add((str(doc_id), int(pn)))
@@ -126,10 +126,10 @@ class ContextExpansionPostProcessor:
             meta = n.node.metadata
             if (
                 meta.get("doc_type_code") == "ppt"
-                and "doc_id" in meta
+                and "source_doc_id" in meta
                 and "page_number" in meta
             ):
-                doc_id = str(meta["doc_id"])
+                doc_id = str(meta["source_doc_id"])
                 ppt_groups.setdefault(doc_id, set()).add(int(meta["page_number"]))
 
         if ppt_groups:
@@ -183,7 +183,7 @@ class ContextExpansionPostProcessor:
                 node = TextNode(
                     text=dp.content or "",
                     metadata={
-                        "doc_id": doc_id,
+                        "source_doc_id": doc_id,
                         "page_id": dp.id,
                         "page_number": dp.page_number,
                         "doc_type_code": "ppt",
@@ -213,7 +213,7 @@ class ContextExpansionPostProcessor:
 
         for n in original_nodes:
             meta = n.node.metadata
-            doc_id = meta.get("doc_id")
+            doc_id = meta.get("source_doc_id")
             node_id = getattr(n.node, "node_id", None) or getattr(n.node, "id_", None)
             if not doc_id or not node_id:
                 continue

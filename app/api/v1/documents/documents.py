@@ -90,10 +90,8 @@ async def update_document(doc_in: DocumentUpdate):
 @router.delete("/delete", summary="删除文档")
 async def delete_document(document_id: int = Query(..., description="文档ID")):
     doc = await document_controller.get(id=document_id)
-    # 清理向量数据
-    await chunk_service.delete_by_doc_id(document_id)
-    # 清理页面记录及截图
-    await _cleanup_doc_pages(document_id)
+    # 清理所有关联数据（向量、切片、页面）
+    await _cleanup_related_data(document_id)
     # 软删除文档
     doc.is_deleted = True
     await doc.save()
@@ -106,8 +104,14 @@ async def retry_document(document_id: int = Query(..., description="文档ID"), 
     doc = await document_controller.get(id=document_id)
     if doc.status not in ("failed", "rejected"):
         return Fail(msg="只能重试失败或被驳回的文档")
-    background_tasks.add_task(document_pipeline.process_document, document_id)
-    logger.info("[Document] Retry queued: id=%s", document_id)
+
+    # 已提取过内容的文档（之前审批通过但在向量化阶段失败），直接重新向量化，无需重新提取和审批
+    if doc.content and doc.status == "failed":
+        background_tasks.add_task(document_pipeline.vectorize_document, document_id)
+        logger.info("[Document] Retry vectorize queued: id=%s", document_id)
+    else:
+        background_tasks.add_task(document_pipeline.process_document, document_id)
+        logger.info("[Document] Retry process queued: id=%s", document_id)
     return Success(msg="已加入重试队列")
 
 
@@ -156,3 +160,19 @@ async def _cleanup_doc_pages(document_id: int):
     deleted_count = await DocumentPage.filter(document_id=document_id).delete()
     if deleted_count:
         logger.info("[Document] Cleaned up %d page records for doc_id=%s", deleted_count, document_id)
+
+
+async def _cleanup_related_data(document_id: int):
+    """清理文档的所有关联数据：向量、切片结果、页面记录"""
+    from app.models.rag import SlicingResult
+
+    # 1. 清理向量数据
+    await chunk_service.delete_by_doc_id(document_id)
+
+    # 2. 清理切片结果
+    deleted_slicing = await SlicingResult.filter(document_id=document_id).delete()
+    if deleted_slicing:
+        logger.info("[Document] Cleaned up %d slicing records for doc_id=%s", deleted_slicing, document_id)
+
+    # 3. 清理页面记录及截图
+    await _cleanup_doc_pages(document_id)
