@@ -28,7 +28,7 @@ class ChunkService:
         conn = await self._get_connection()
         _, results = await conn.execute_query(
             f"SELECT id, node_id, text, metadata_ FROM {self._table_name} "
-            f"WHERE metadata_->>'doc_id' = $1 ORDER BY id",
+            f"WHERE metadata_->>'source_doc_id' = $1 ORDER BY id",
             [str(doc_id)],
         )
         return [dict(row) for row in results]
@@ -45,7 +45,7 @@ class ChunkService:
         node_id = str(uuid.uuid4())
         metadata = {
             "knowledge_base_id": str(kb.id),
-            "doc_id": str(doc_id),
+            "source_doc_id": str(doc_id),
             "title": doc.title,
             "source_type": doc.source_type,
         }
@@ -109,7 +109,7 @@ class ChunkService:
                 SELECT node_id, text, metadata_,
                        ROW_NUMBER() OVER (ORDER BY id) AS rn
                 FROM {self._table_name}
-                WHERE metadata_->>'doc_id' = $1
+                WHERE metadata_->>'source_doc_id' = $1
             ),
             target AS (
                 SELECT rn FROM doc_chunks WHERE node_id = $2

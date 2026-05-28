@@ -739,7 +739,7 @@ const columns = [
                       <div ref="pageVditorContainer" style="min-height: 300px" />
                     </template>
                     <template v-else>
-                      <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" />
+                      <div v-if="currentPageContent" ref="pagePreviewContainer" class="vditor-preview" style="background: #fff; padding: 12px; border-radius: 4px;" />
                       <NEmpty v-else description="暂无页面内容" />
                     </template>
                   </NCard>
@@ -752,7 +752,7 @@ const columns = [
               <!-- 编辑模式：所见即所得 -->
               <div v-if="isContentEditable" ref="vditorContainer" style="min-height: 500px" />
               <!-- 预览模式 -->
-              <div v-else-if="contentDoc.content" ref="previewContainer" class="vditor-preview" />
+              <div v-else-if="contentDoc.content" ref="previewContainer" class="vditor-preview" style="background: #fff; padding: 12px; border-radius: 4px;" />
               <NEmpty v-else description="暂无文档内容" style="margin-top: 40px" />
             </template>
 

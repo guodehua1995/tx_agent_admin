@@ -20,6 +20,7 @@ from app.services.agent_service import agent_service  # noqa: F401  保持 agent
 from app.services.extraction import run_extraction
 from app.services.feishu_service import feishu_service
 from app.services.rag_service import rag_service
+from app.services.chunk_service import chunk_service
 from app.services.slicing import SLICING_HANDLERS, run_slicing
 from app.settings import settings
 
@@ -215,6 +216,10 @@ class DocumentPipeline:
         try:
             kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
 
+            # 先清理旧向量数据（重试场景下防止重复入库）
+            await chunk_service.delete_by_doc_id(doc_id)
+            logger.info(f"Cleaned up existing vectors before vectorize: doc_id={doc_id}")
+
             # 合同类文档：使用审核后的最终原文 → 切片 → 逐条款入库
             if doc.doc_type_code == DocumentTypeCode.CONTRACT:
                 await self._finalize_content_from_review(doc)
@@ -267,7 +272,16 @@ class DocumentPipeline:
                 await doc.save()
 
     async def _run_slicing(self, doc: Document):
-        """执行切片处理（按 doc_type_code 路由到 SLICING_HANDLERS）"""
+        """执行切片处理（按 doc_type_code 路由到 SLICING_HANDLERS）
+
+        如果已存在切片结果（重试场景），直接复用，不重复切片。
+        """
+        # 重试场景：切片已完成，直接跳过
+        existing = await SlicingResult.filter(document_id=doc.id).first()
+        if existing:
+            logger.info(f"Slicing already exists for doc_id={doc.id}, skipping")
+            return
+
         chat_models = await ai_config_controller.get_active_chat_models()
         if not chat_models:
             raise ValueError("没有可用的 Chat 模型配置")
@@ -316,7 +330,7 @@ class DocumentPipeline:
                 title=doc.title,
                 source_type=doc.source_type,
                 knowledge_base_id=str(kb.id),
-                doc_id=str(doc.id),
+                source_doc_id=str(doc.id),
                 doc_type_code=doc.doc_type_code,
                 file_type=meta.get("file_type", "unknown"),
                 page_id=page.id,
@@ -383,7 +397,8 @@ class DocumentPipeline:
                 f"[合同: {doc.title} | "
                 f"甲方: {meta.get('party_a', '')} | "
                 f"乙方: {meta.get('party_b', '')} | "
-                f"类型: {meta.get('contract_type', '')}]"
+                f"类型: {meta.get('contract_type', '')}] | "
+                f"条款 {clause['clause_title']}"
             )
             text = f"{header}\n{content}"
 
@@ -391,7 +406,7 @@ class DocumentPipeline:
                 title=doc.title,
                 source_type=doc.source_type,
                 knowledge_base_id=str(kb.id),
-                doc_id=str(doc.id),
+                source_doc_id=str(doc.id),
                 doc_type_code=doc.doc_type_code,
                 party_a=meta.get("party_a", "") or "",
                 party_b=meta.get("party_b", "") or "",

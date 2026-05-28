@@ -9,7 +9,6 @@ from app.models.enums import DocumentTypeCode
 from app.models.rag import KnowledgeBase
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.documents import DocumentCreate
-from app.services.chunk_service import chunk_service
 from app.services.document_pipeline import document_pipeline
 
 logger = logging.getLogger(__name__)
@@ -54,13 +53,11 @@ async def create_kb_document(doc_in: DocumentCreate, background_tasks: Backgroun
 
 @router.delete("/delete", summary="删除文档并清理向量")
 async def delete_kb_document(document_id: int = Query(..., description="文档ID")):
-    from app.api.v1.documents.documents import _cleanup_doc_pages
+    from app.api.v1.documents.documents import _cleanup_related_data
 
     doc = await document_controller.get(id=document_id)
-    # 清理向量
-    await chunk_service.delete_by_doc_id(document_id)
-    # 清理页面记录及截图
-    await _cleanup_doc_pages(document_id)
+    # 清理所有关联数据（向量、切片、页面）
+    await _cleanup_related_data(document_id)
     # 软删除文档
     doc.is_deleted = True
     await doc.save()

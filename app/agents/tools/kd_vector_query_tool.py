@@ -21,7 +21,7 @@ from app.services.llm_builder import build_embed_model
 from .base import BaseToolProvider, adapt_to_langchain, adapt_to_llamaindex
 
 METADATA_KEEP_KEYS = [
-    "doc_id", "page_id", "page_number", "doc_type_code",
+    "source_doc_id", "page_id", "page_number", "doc_type_code",
     "screenshot_url", "is_context_expansion",
     # 合同专用字段
     "party_a", "party_b", "contract_type",
