@@ -174,7 +174,10 @@ class FeishuBotClientManager:
 
             # 构建回复卡片
             bot = await feishu_bot_controller.get(id=bot_id)
-            card = await self._feishu_service.build_answer_card(answer, sources)
+            image_keys = await self._feishu_service.upload_image_keys_from_sources(
+                bot.app_id, bot.app_secret, sources
+            )
+            card = await self._feishu_service.build_answer_card(answer, sources, image_keys=image_keys)
 
             # 发送回复
             await self._feishu_service.send_message(

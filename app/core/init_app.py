@@ -198,6 +198,19 @@ async def init_menus():
                 parent_id=knowledge_menu.id, icon="carbon:settings", is_hidden=False,
                 component="/rag/global-config", keepalive=False,
             ),
+            # 以下为隐藏子页面（不出现在侧边栏），需入库以生成前端动态路由与权限
+            # 知识库详情下的“管理文档”页面
+            Menu(
+                menu_type=MenuType.MENU, name="知识库内容", path="kb-content", order=10,
+                parent_id=knowledge_menu.id, icon="carbon:folder-open", is_hidden=True,
+                component="/rag/kb-content", keepalive=False,
+            ),
+            # 文档详情下的“管理切片”页面
+            Menu(
+                menu_type=MenuType.MENU, name="文档分片", path="doc-content", order=11,
+                parent_id=knowledge_menu.id, icon="carbon:text-align-left", is_hidden=True,
+                component="/rag/doc-content", keepalive=False,
+            ),
         ])
 
         # --- AI应用 ---

@@ -29,6 +29,57 @@ META_PAGES_HEAD = 2         # 元信息提取：取前 N 页
 META_PAGES_TAIL = 2         # 元信息提取：取后 N 页
 SUMMARY_CONTEXT_CLAUSES = 5 # 概要生成：取前 N 条作为上下文
 
+# Markdown 标题正则：行首 1~6 个 # 后跟空格再跟非空字符，避免误匹配 #include / 颜色码 #fff 之类
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+\S", re.MULTILINE)
+
+
+def _detect_md_split_level(text: str) -> Optional[int]:
+    """扫描全文 markdown 标题，返回切分锚点的层级（1~6）。
+
+    规则：取全文出现的所有标题层级集合 S（去重）：
+    - 无标题：返回 None（走数字编号兜底）；
+    - len(S) == 1：返回该唯一层级；
+    - len(S) >= 2：返回**倒数第二层**（即取最深层级的上一级作为切分锚点，
+      使得最深层级及其下方的枚举被收纳到锚点章节内，避免切得太碎）。
+
+    例：
+    - 全文 # / ## / ###      -> 返回 2（按 ## 切）
+    - 全文 # / ## / ### / ####-> 返回 3（按 ### 切）
+    - 全文 ### / ####          -> 返回 3（按 ### 切，雀巢合同形态）
+    - 全文仅 #                 -> 返回 1
+    """
+    levels = sorted({len(m.group(1)) for m in _MD_HEADING_RE.finditer(text or "")})
+    if not levels:
+        return None
+    if len(levels) == 1:
+        return levels[0]
+    return levels[-2]
+
+
+def _build_md_anchor_section(level: Optional[int]) -> str:
+    """根据探测到的 markdown 切分层级，生成注入 prompt 的硬规则段落。
+
+    无 markdown 标题时返回数字编号兜底规则。
+    """
+    if level is None:
+        return (
+            "- 本文档**未检测到 Markdown 标题**，请按原文中的数字/中文编号判断章节边界：\n"
+            "  `1. / 2. / 3.`、`一、/ 二、/ 三、`、`Article 1 / Article 2` 等顶级编号必须各自至少有一个 marker；\n"
+            "  即使该章节下仅是字母枚举 a/b/c、(i)/(ii)、项目符列表，也必须在该章节标题起始处打 marker，\n"
+            "  不能因为「枚举不打 marker」而使整个章节被上一章节吞并。"
+        )
+    hashes = "#" * level
+    deeper = "#" * (level + 1)
+    return (
+        f"- 本文档的 **Markdown 切分锚点为 `{hashes}`**（{level} 级标题）。\n"
+        f"  规则推导：扫描全文出现的标题层级集合 S，若 |S|>=2 则取「倒数第二层」作为切分锚点，\n"
+        f"  本次任务计算结果即 `{hashes}`。\n"
+        f"- **每个 `{hashes}` 标题起始处必须打且仅打 1 个 marker**，无论其下方是字母枚举 a/b/c、(i)/(ii)、\n"
+        f"  项目符列表，还是更深的 `{deeper}` 副标题，整个 `{hashes}` 章节都收纳为同一个 marker，**不再下钻**。\n"
+        f"- 比 `{hashes}` 更深的 Markdown 标题（如 `{deeper}`）**不独立打 marker**；\n"
+        f"  比 `{hashes}` 更浅的 Markdown 标题（如 `{'#' * (level - 1) if level > 1 else ''}` 等）也不独立打 marker（它们是「目录性」标题，下方会有多个 `{hashes}` 子章节各自承载 marker）。"
+    )
+
 
 META_EXTRACT_PROMPT = """你是合同解析助手。仅从以下合同的首部和尾部文本中提取签约主体信息。
 
@@ -55,11 +106,18 @@ STRUCTURE_PROMPT = """你是合同解析助手。分析以下合同片段，按�
 # 切分颗粒度要求（重要）
 marker 应放在**含有具体内容的最低条款层级**的起始位置，避免过粗（一整个章节作为一个 marker）也避免过碎（每行子项都加 marker）。
 
-判定规则：
-- 若条款无子项（如"1. 合作期限：本合同期限为 2 年。"），在该条起始位置打一个 marker；
-- 若条款有多层嵌套结构，仅在**含具体内容的最低层级**的起始位置打 marker；更高层级（纯嵌套结构）不独立打 marker，更低层级的枚举/子条款也不独立打 marker。
+## 硬规则（优先级高于下述软规则）
+{markdown_anchor_section}
+- **同级并列章节**之间不能因其中一个被误识别为"上一章节的枚举子项"而跳过 marker，同级并列章节必须各自拥有一个 marker。
 
-示例：
+## 软规则
+- 若文档不含 Markdown 标题（# / ## / ###…），按原文中的数字编号判断：
+  - 条款无子项（如"1. 合作期限：本合同期限为 2 年。"），在该条起始位置打一个 marker；
+  - 条款有多层数字编号嵌套结构（如 2.1 / 2.1.1 / 2.1.1.1），仅在**含具体内容的最低层级**的起始位置打 marker；
+  - 更高层级的纯嵌套结构不独立打 marker，更低层级的枚举/字母列表 a/b/c、(i)/(ii) 也不独立打 marker。
+- 「软规则」与「硬规则」冲突时，**以硬规则为准**。
+
+## 示例 1：多层数字编号嵌套（无 Markdown 标题）
 输入原文：
 ```
 1. 合作期限
@@ -74,17 +132,42 @@ marker 应放在**含有具体内容的最低条款层级**的起始位置，避
 2.1.2.2 版本升级
 ```
 应输出的 clause_markers：
-- {"title": "合作期限", "marker": "1. 合作期限\\n本合同期限为 2 年。"}
-- {"title": "合作范围-服务内容-软件开发", "marker": "2.1.1 软件开发\\n2.1.1.1 后端服务"}
-- {"title": "合作范围-服务内容-技术支持", "marker": "2.1.2 技术支持\\n2.1.2.1 故障响应"}
+- {"title": "合作期限", "marker": "1. 合作期限\n本合同期限为 2 年。"}
+- {"title": "合作范围-服务内容-软件开发", "marker": "2.1.1 软件开发\n2.1.1.1 后端服务"}
+- {"title": "合作范围-服务内容-技术支持", "marker": "2.1.2 技术支持\n2.1.2.1 故障响应"}
 
 注意："2. 合作范围"与"2.1 服务内容"不独立打 marker（太粗）；4 级编号也不打 marker（太碎）。
+
+## 示例 2：列表型条款（标题 + 字母枚举，双语合同常见结构，最深 Markdown 标题为 ####）
+本示例假设本次任务的 Markdown 切分锚点为 `###`（全文出现 ### 与 ####，按「倒数第二层」则取 ###）。
+输入原文：
+```
+### 1. DEFINITIONS
+#### 定義
+a. "Affiliate" means a company controlled by ...
+   "关联公司"系指由一方控制...
+b. "Agreement" means this agreement and its schedules ...
+   "协议"系指本协议及其附表...
+c. "Background Intellectual Property" means ...
+
+### 2. SCOPE OF SERVICE
+#### 服务范围
+a. The Service Provider shall provide ...
+   服务提供者应向公司提供...
+b. The Service Provider shall provide regular update ...
+```
+应输出的 clause_markers（按「硬规则」每个 ### 标题都要有）：
+- {"title": "定义", "marker": "### 1. DEFINITIONS\n#### 定義\na. \"Affiliate\""}
+- {"title": "服务范围", "marker": "### 2. SCOPE OF SERVICE\n#### 服务范围\na."}
+
+注意：#### 不独立打 marker（比错点深一层）；字母枚举 a/b/c 也不独立打 marker；但 ### 1./### 2. 这两个同级标题**必须各自有一个 marker**，不允许 SCOPE OF SERVICE 被 DEFINITIONS 吞并。
 
 # 其他要求
 1. marker 必须是片段中**实际存在的连续原文**，长度 20~40 字，逐字复制不要改写、不要更改标点/空白/全半角；
 2. 即使片段以未完成的条款结尾（被截断），仍将该条款的 marker 加入列表；
 3. 如果片段中完全没有可识别的条款（前言/附件清单等），返回空数组；
-4. title提取规则： 按条款层级拼接title，不含编号。例如 1.合作期限 -> 合作期限 2.1.1 软件开发 -> 合作范围-服务内容-软件开发。"""
+4. title提取规则：按条款层级拼接 title，不含编号；双语合同优先取中文标题，若无中文则用英文标题。例如 1.合作期限 -> 合作期限；2.1.1 软件开发 -> 合作范围-服务内容-软件开发。
+5. 双语合同规范：同一条款同时出现中、英文版本时，**只在该条款的起始位置（以先出现的语言为准）打 1 个 marker**，不要为同一条款的不同语言版本重复打 marker。摘取 marker 原文时优先选择能唯一识别该条款的 20~40 字连续原文（例如含标题编号的那一行、首个枚举项的开头等），避免选取多条款重复出现的公共句式。"""
 
 
 RECOVER_PROMPT = """你是合同解析助手。以下合同片段中包含一个指定标题的条款，请找到该条款并**逐字复制**其完整原文。
@@ -232,6 +315,15 @@ class ContractSlicingHandler(BaseSlicingHandler):
         seen_markers: set[str] = set()
         last_top_clause: Optional[str] = None  # 上一窗口最后一个 keep marker 的完整 title
 
+        # 全文预扫一次，确定本任务的 markdown 切分锚点层级（倒数第二层）
+        # 在滑动窗口内 LLM 只看 5000 字片段、无法全局推断层级集合，故由代码端将决定后的锚点注入 prompt 作为硬规则。
+        md_split_level = _detect_md_split_level(text)
+        md_anchor_section = _build_md_anchor_section(md_split_level)
+        logger.debug(
+            f"[contract] markdown split anchor: level={md_split_level}, "
+            f"hashes={'#' * md_split_level if md_split_level else 'N/A'}"
+        )
+
         while cursor < len(text):
             chunk = text[cursor : cursor + WINDOW_SIZE]
             chunk_end = cursor + len(chunk)
@@ -243,7 +335,11 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 if last_top_clause
                 else "（无，这是第一个窗口）"
             )
-            prompt = STRUCTURE_PROMPT.replace("{last_top_clause}", context_value)
+            prompt = (
+                STRUCTURE_PROMPT
+                .replace("{last_top_clause}", context_value)
+                .replace("{markdown_anchor_section}", md_anchor_section)
+            )
 
             try:
                 raw = await self.call_llm(prompt, chunk)
@@ -274,8 +370,16 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 cursor += WINDOW_SIZE - MIN_PROGRESS
                 continue
 
-            # 保留的 markers：最后一窗全收，非最后窗保留前 N-1 个
-            keep = markers if is_last_window else markers[:-1]
+            # 保留策略：
+            # - 最后一窗：全收；
+            # - 其它窗口同时识别 ≥2 个：舍弃最后一个（可能被截断）留给下一窗复识；
+            # - 单 marker 场景：LLM 可能漏识别后续章节，若仍丢弃它会造成
+            #   后续章节被本章节大面积吞并 -> 必须收下该 marker（seen_markers 会去重）
+            if is_last_window or len(markers) >= 2:
+                keep = markers if is_last_window else markers[:-1]
+            else:
+                keep = markers  # 单 marker 场景：不丢弃，避免空转与吞并
+
             for m in keep:
                 self._append_marker(all_markers, seen_markers, m, cursor, chunk_end)
 
@@ -286,7 +390,14 @@ class ContractSlicingHandler(BaseSlicingHandler):
             if is_last_window:
                 break
 
-            # 用最后一个 marker 在 chunk 的位置作为下一轮起点
+            # 推进策略：
+            # - 多 marker：以未被收下的 markers[-1] 在 chunk 中的位置作下轮起点；
+            # - 单 marker：该 marker 已被收下，不能再以它为锚，否则下轮以同一位置起始会
+            #   重复识别同一 marker 造成空转，改为半窗强制推进
+            if len(markers) == 1:
+                cursor += WINDOW_SIZE - MIN_PROGRESS
+                continue
+
             last_marker = (markers[-1].get("marker") or "").strip()
             offset = chunk.find(last_marker) if last_marker else -1
             if offset < 0:

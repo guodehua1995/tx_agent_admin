@@ -82,7 +82,7 @@ class FeishuService:
             json={"receive_id": chat_id, "msg_type": msg_type, "content": content},
         )
 
-    async def build_answer_card(self, answer: str, sources: list) -> dict:
+    async def build_answer_card(self, answer: str, sources: list, image_keys: list[str] | None = None) -> dict:
         """构建消息卡片
 
         飞书卡片 markdown 标签支持的格式：
@@ -96,6 +96,9 @@ class FeishuService:
         - > 引用
 
         不支持 # 标题，需要用其他方式处理
+
+        Args:
+            image_keys: 可选的飞书 IM 图片 image_key 列表，追加为卡片 img 元素
         """
         # 处理标题：将 # 转为加粗文本
         import re
@@ -119,11 +122,26 @@ class FeishuService:
             if type == "doc_url" or type == "img_url":
                 title = metadata.get("title", "未知来源")
                 url = metadata.get("url")
-                source_elements += f"[{title}]({url})\n"
+                if url:
+                    source_elements += f"[{title}]({url})\n"
 
         elements = [
             {"tag": "markdown", "content": answer},
         ]
+
+        # PDF/PPT 召回页截图以原生 img 元素插入，避免依赖外链可达性
+        if image_keys:
+            elements.append({"tag": "hr"})
+            elements.append({"tag": "markdown", "content": "**参考页截图：**"})
+            for img_key in image_keys:
+                elements.append({
+                    "tag": "img",
+                    "img_key": img_key,
+                    "alt": {"tag": "plain_text", "content": "页截图"},
+                    "mode": "fit_horizontal",
+                    "preview": True,
+                })
+
         if source_elements:
             elements.extend([
                 {"tag": "hr"},
@@ -134,6 +152,95 @@ class FeishuService:
             "config": {"wide_screen_mode": True},
             "elements": elements,
         }
+
+    async def upload_message_image(
+        self, app_id: str, app_secret: str, image_bytes: bytes
+    ) -> str:
+        """上传图片到飞书 IM 附件存储，返回 image_key
+
+        对应开放平台接口 POST /im/v1/images，image_type=message。
+        上传的图片不占用企业云盘容量，由飞书内部托管。
+        """
+        token = await self.get_tenant_access_token(app_id, app_secret)
+        url = f"{self._base_url}/im/v1/images"
+        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=60) as client:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                data={"image_type": "message"},
+                files={"image": ("page.png", image_bytes, "image/png")},
+            )
+            data = resp.json()
+        code = data.get("code")
+        if code is not None and code != 0:
+            raise FeishuAPIError(data.get("msg", "图片上传失败"), code=code)
+        return data["data"]["image_key"]
+
+    async def upload_image_keys_from_sources(
+        self,
+        app_id: str,
+        app_secret: str,
+        sources: list,
+        max_count: int = 3,
+    ) -> list[str]:
+        """从 RAG sources 中拽出 PDF/PPT 页截图，读 TOS 字节后上传飞书拿 image_key。
+
+        触发条件：元素 type==img_url 且 doc_type_code 在 (pdf,ppt) 或存在分页信息。
+        仅取前 max_count 张以限制卡片体量与上传 QPS。
+        单张失败不影响其他张。
+
+        缓存：以 (app_id, screenshot_key) 为键复用已上传过的 image_key，
+        缓存后端由 IMAGE_KEY_CACHE_BACKEND 控制（memory/redis）。
+        """
+        from app.services.file_storage import file_storage
+        from app.services.image_key_cache import image_key_cache
+
+        candidates: list[dict] = []
+        seen_keys: set[str] = set()
+        for src in sources:
+            meta = src.get("metadata") or {}
+            if meta.get("type") != "img_url":
+                continue
+            key = meta.get("screenshot_key")
+            if not key or key in seen_keys:
+                continue
+            doc_type_code = (meta.get("doc_type_code") or "").lower()
+            page_number = meta.get("page_number")
+            # PDF/PPT 或存在分页元信息都视为有效
+            if doc_type_code not in ("pdf", "ppt") and page_number is None:
+                continue
+            seen_keys.add(key)
+            candidates.append({"key": key, "page_number": page_number})
+            if len(candidates) >= max_count:
+                break
+
+        if not candidates:
+            return []
+
+        image_keys: list[str] = []
+        for c in candidates:
+            screenshot_key = c["key"]
+            try:
+                # 1) 缓存命中则直接复用
+                cached = await image_key_cache.get(app_id, screenshot_key)
+                if cached:
+                    image_keys.append(cached)
+                    logger.debug(
+                        f"[Feishu] image_key cache hit: app_id={app_id}, key={screenshot_key}"
+                    )
+                    continue
+
+                # 2) 未命中：读 TOS 字节 + 上传飞书 + 回写缓存
+                img_bytes = await file_storage.read_bytes(screenshot_key)
+                image_key = await self.upload_message_image(app_id, app_secret, img_bytes)
+                await image_key_cache.set(app_id, screenshot_key, image_key)
+                image_keys.append(image_key)
+            except Exception as e:
+                logger.warning(
+                    f"[Feishu] Upload page screenshot failed: key={screenshot_key}, err={e}"
+                )
+        return image_keys
+
 
     async def create_doc_in_folder(self, folder_token: str, title: str, content: str, access_token: str) -> str:
         """将切片结果发布到飞书云文档指定文件夹"""
