@@ -254,7 +254,14 @@ class RAGService:
         return agent, chat_history
 
     async def _extract_sources_from_tool_calls(self, tool_calls) -> list:
-        """从 Agent 工具调用结果中提取 sources"""
+        """从 Agent 工具调用结果中提取 sources
+
+        返回元素结构：
+        - img_url：{title, url(预签1天), screenshot_key(对象key), page_number, doc_type_code, type}
+        - doc_url：{title, url(飞书文档外链), type}
+        """
+        from app.services.page_view import presign_screenshot
+
         doc_ids = set()
         page_ids = set()
         for tool_call in tool_calls:
@@ -275,16 +282,28 @@ class RAGService:
 
         if page_ids:
             pages = await DocumentPage.filter(id__in=list(page_ids)).all()
+            # 预加载 doc_type_code 供飞书侧的 PDF/PPT 过滤
+            doc_type_map: dict[int, str] = {}
+            page_doc_ids = {p.document_id for p in pages}
+            if page_doc_ids:
+                docs_for_pages = await Document.filter(id__in=list(page_doc_ids)).all()
+                doc_type_map = {d.id: d.doc_type_code for d in docs_for_pages}
+
             for page in pages:
-               url = page.screenshot_url
-               sources_data.append({
+                signed_url = await presign_screenshot(page.screenshot_url)
+                sources_data.append({
                     "metadata": {
                         "title": f"页码{page.page_number}",
-                        "url": url,
-                        "type": "img_url"
+                        "url": signed_url,
+                        "screenshot_key": page.screenshot_url,
+                        "page_id": page.id,
+                        "page_number": page.page_number,
+                        "document_id": page.document_id,
+                        "doc_type_code": doc_type_map.get(page.document_id),
+                        "type": "img_url",
                     }
                 })
-        
+
         if doc_ids:
             docs = await Document.filter(id__in=list(doc_ids)).all()
             for doc in docs:

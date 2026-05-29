@@ -18,6 +18,7 @@ from app.models.rag import (
 from app.schemas.vector_metadata import ContractMetadata, PagedDocumentMetadata
 from app.services.agent_service import agent_service  # noqa: F401  保持 agent 注册
 from app.services.extraction import run_extraction
+from app.services.extraction.base import BaseExtractor
 from app.services.feishu_service import feishu_service
 from app.services.rag_service import rag_service
 from app.services.chunk_service import chunk_service
@@ -141,7 +142,7 @@ class DocumentPipeline:
                 file_bytes = f.read()
             filename = Path(file_path).name
             pages = await document_converter.convert(file_bytes, ext, filename)
-            await self._save_page_records(doc, pages)
+            await BaseExtractor._save_page_records(doc, pages)
             markdown_content = document_converter.pages_to_markdown(pages)
            
             doc_token, doc_type = feishu_service.parse_feishu_url(file_path)
@@ -151,30 +152,6 @@ class DocumentPipeline:
         # 其他类型尝试作为纯文本读取
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
-
-    async def _save_page_records(self, doc: Document, pages):
-        """保存页面截图并创建 DocumentPage 记录"""
-        from app.services.file_storage import file_storage
-
-        has_images = any(getattr(p, "image_bytes", None) for p in pages)
-        if not has_images and len(pages) <= 1:
-            return
-
-        for page in pages:
-            screenshot_url = None
-            if page.image_bytes:
-                path = f"pages/doc_{doc.id}/page_{page.page_number}.png"
-                screenshot_url = await file_storage.save(path, page.image_bytes)
-
-            await DocumentPage.create(
-                document_id=doc.id,
-                page_number=page.page_number,
-                total_pages=page.total_pages,
-                content=page.content,
-                screenshot_url=screenshot_url,
-            )
-
-        logger.info(f"Page records saved: doc_id={doc.id}, pages={len(pages)}")
 
     async def _fetch_web_content(self, doc: Document) -> str:
         """抓取网页内容"""

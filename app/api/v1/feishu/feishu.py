@@ -192,7 +192,11 @@ async def _process_webhook_message(
             question=question,
         )
 
-        card = await feishu_service.build_answer_card(result["answer"], result["sources"])
+        sources = result.get("sources", [])
+        image_keys = await feishu_service.upload_image_keys_from_sources(
+            bot.app_id, bot.app_secret, sources
+        )
+        card = await feishu_service.build_answer_card(result["answer"], sources, image_keys=image_keys)
         await feishu_service.send_message(
             app_id=bot.app_id,
             app_secret=bot.app_secret,

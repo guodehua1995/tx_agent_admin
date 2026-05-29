@@ -94,8 +94,22 @@ class BaseExtractor:
     # ---------- 分页落库（合同/PPT 共用） ----------
 
     @staticmethod
+    def page_screenshot_key(doc_id: int, page_number: int) -> str:
+        """页截图在存储后端的对象 key（统一路径规则）"""
+        return f"pages/doc_{doc_id}/page_{page_number}.png"
+
+    @staticmethod
+    def doc_screenshot_prefix(doc_id: int) -> str:
+        """文档级截图目录前缀，用于删除文档时批量清理"""
+        return f"pages/doc_{doc_id}/"
+
+    @staticmethod
     async def _save_page_records(doc: Document, pages: list) -> None:
-        """保存页面截图并创建 DocumentPage 记录（仅当存在截图或多页时落库）"""
+        """保存页面截图并创建 DocumentPage 记录（仅当存在截图或多页时落库）
+
+        DocumentPage.screenshot_url 字段语义为"对象 key"（如 pages/doc_3/page_1.png），
+        前端展示前需经 file_storage.presign() 转换为可访问 URL。
+        """
         from app.services.file_storage import file_storage
 
         has_images = any(getattr(p, "image_bytes", None) for p in pages)
@@ -103,17 +117,17 @@ class BaseExtractor:
             return
 
         for page in pages:
-            screenshot_url = None
+            screenshot_key = None
             if page.image_bytes:
-                path = f"pages/doc_{doc.id}/page_{page.page_number}.png"
-                screenshot_url = await file_storage.save(path, page.image_bytes)
+                key = BaseExtractor.page_screenshot_key(doc.id, page.page_number)
+                screenshot_key = await file_storage.save(key, page.image_bytes)
 
             await DocumentPage.create(
                 document_id=doc.id,
                 page_number=page.page_number,
                 total_pages=page.total_pages,
                 content=page.content,
-                screenshot_url=screenshot_url,
+                screenshot_url=screenshot_key,
             )
 
         logger.info(f"Page records saved: doc_id={doc.id}, pages={len(pages)}")

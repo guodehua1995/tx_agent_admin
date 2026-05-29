@@ -11,6 +11,7 @@ from app.models.rag import DocumentPage, SlicingResult
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.reviews import ReviewSubmit
 from app.services.document_pipeline import document_pipeline
+from app.services.page_view import to_page_views
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def get_review_detail(document_id: int = Query(..., description="文档ID"
     pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values(
         "id", "page_number", "total_pages", "screenshot_url"
     )
-    doc_dict["pages"] = list(pages)
+    doc_dict["pages"] = await to_page_views(pages)
 
     return Success(data=doc_dict)
 

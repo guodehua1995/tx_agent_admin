@@ -15,6 +15,7 @@ from app.schemas.documents import (
 )
 from app.services.chunk_service import chunk_service
 from app.services.document_pipeline import document_pipeline
+from app.services.page_view import to_page_views
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def get_document(document_id: int = Query(..., description="文档ID")):
     pages = await DocumentPage.filter(document_id=document_id).order_by("page_number").values(
         "id", "page_number", "total_pages", "screenshot_url"
     )
-    data["pages"] = list(pages)
+    data["pages"] = await to_page_views(pages)
     return Success(data=data)
 
 
@@ -145,18 +146,34 @@ async def list_document_type():
 
 
 async def _cleanup_doc_pages(document_id: int):
-    """删除文档关联的 DocumentPage 记录及截图文件"""
+    """删除文档关联的 DocumentPage 记录及截图文件
+
+    screenshot_url 字段语义为对象 key，直接交给后端删除；
+    另外以文档级前缀作一次兜底清理，防止漏文件。
+    """
     from app.models.rag import DocumentPage
+    from app.services.extraction.base import BaseExtractor
     from app.services.file_storage import file_storage
 
     pages = await DocumentPage.filter(document_id=document_id).all()
     for page in pages:
         if page.screenshot_url:
-            # screenshot_url 格式: /media/pages/doc_X/page_Y.png → 取相对路径
-            rel_path = page.screenshot_url.lstrip("/").removeprefix("media/")
-            if rel_path.startswith(file_storage.url_prefix.lstrip("/")):
-                rel_path = page.screenshot_url[len(file_storage.url_prefix) + 1:]
-            await file_storage.delete(rel_path)
+            try:
+                await file_storage.delete(page.screenshot_url)
+            except Exception as e:
+                logger.warning(
+                    "[Document] Delete page screenshot failed: doc_id=%s, key=%s, err=%s",
+                    document_id, page.screenshot_url, e,
+                )
+
+    # 前缀兜底清理（针对 TOS 可以一次性除掉漏文件；本地后端为 rmtree）
+    try:
+        await file_storage.delete_prefix(BaseExtractor.doc_screenshot_prefix(document_id))
+    except Exception as e:
+        logger.warning(
+            "[Document] Delete page prefix failed: doc_id=%s, err=%s", document_id, e,
+        )
+
     deleted_count = await DocumentPage.filter(document_id=document_id).delete()
     if deleted_count:
         logger.info("[Document] Cleaned up %d page records for doc_id=%s", deleted_count, document_id)

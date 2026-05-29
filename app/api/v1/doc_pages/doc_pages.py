@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query
 from app.models.rag import Document, DocumentPage
 from app.schemas.base import Fail, Success
 from app.schemas.documents import PageContentUpdate
+from app.services.page_view import presign_screenshot, to_page_views
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ async def list_doc_pages(doc_id: int = Query(..., description="文档ID")):
     if not await Document.exists(id=doc_id, is_deleted=False):
         return Fail(msg="文档不存在")
     pages = await DocumentPage.filter(document_id=doc_id).order_by("page_number").values()
-    return Success(data=pages)
+    return Success(data=await to_page_views(pages))
 
 
 @router.get("/detail", summary="文档页面详情")
@@ -39,7 +40,7 @@ async def get_doc_page(
         "page_number": page.page_number,
         "total_pages": page.total_pages,
         "content": page.content,
-        "screenshot_url": page.screenshot_url,
+        "screenshot_url": await presign_screenshot(page.screenshot_url),
     })
 
 

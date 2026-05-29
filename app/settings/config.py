@@ -73,9 +73,21 @@ class Settings(BaseSettings):
     GOTENBERG_URL: str = "http://localhost:3001"
 
     # 文件存储
-    FILE_STORAGE_BACKEND: str = "local"
+    FILE_STORAGE_BACKEND: str = "tos"  # local | tos
     MEDIA_ROOT: str = os.path.join(BASE_DIR, "media")
     MEDIA_URL_PREFIX: str = "/media"
+
+    # 火山引擎 TOS 对象存储（FILE_STORAGE_BACKEND=tos 时启用）
+    TOS_ENDPOINT: str = ""          # e.g. tos-cn-beijing.volces.com
+    TOS_REGION: str = ""            # e.g. cn-beijing
+    TOS_ACCESS_KEY: str = ""
+    TOS_SECRET_KEY: str = ""
+    TOS_BUCKET: str = ""
+
+    # 飞书 IM 图片 image_key 缓存（避免同一截图重复上传）
+    IMAGE_KEY_CACHE_BACKEND: str = "memory"  # memory | redis（redis 待实现）
+    IMAGE_KEY_CACHE_MAX_SIZE: int = 1024
+    IMAGE_KEY_CACHE_TTL: int = 7 * 24 * 3600  # 0 表示不过期
 
     # LlamaIndex / RAG
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
