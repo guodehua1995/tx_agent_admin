@@ -10,6 +10,7 @@ from app.core.init_app import (
     register_exceptions,
     register_routers,
 )
+from app.scheduler import TaskScheduler
 
 try:
     from app.settings.config import settings
@@ -20,7 +21,12 @@ except ImportError:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_data()
+    scheduler = TaskScheduler()
+    await scheduler.start()
     yield
+    await scheduler.stop()
+    from app.core.redis import close_redis
+    await close_redis()
     from app.services.feishu_ws_manager import feishu_ws_manager
     await feishu_ws_manager.stop_all()
     await Tortoise.close_connections()
