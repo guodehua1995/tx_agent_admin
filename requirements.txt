@@ -416,6 +416,8 @@ pyyaml==6.0.2
     #   llama-index-core
     #   uvicorn
     #   vue-fastapi-admin
+redis==5.2.1
+    # via vue-fastapi-admin
 regex==2026.4.4
     # via
     #   dateparser

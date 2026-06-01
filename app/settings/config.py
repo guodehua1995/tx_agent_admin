@@ -93,6 +93,14 @@ class Settings(BaseSettings):
     VECTOR_STORE_TABLE_NAME: str = "knowledge_chunks"
     DEFAULT_EMBEDDING_DIMENSION: int = 2048
 
+    # Redis
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    # 定时任务调度器
+    SCHEDULER_ENABLED: bool = True          # 是否启用定时调度器
+    SCHEDULER_INTERVAL: int = 30            # 扫描间隔（秒）
+    SCHEDULER_DEV_ONLY: bool = False        # True = 仅 development 环境执行调度
+
     # LangChain / LLM
     LLM_PROVIDER: str = "openai"
     LLM_MODEL_NAME: str = "gpt-4"

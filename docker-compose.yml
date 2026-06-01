@@ -25,6 +25,17 @@ services:
       - GOTENBERG_LOG_LEVEL=warn
 
   # ---------------------------------------------------------------
+  # Redis - 分布式锁 / 缓存
+  # ---------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  # ---------------------------------------------------------------
   # PostgreSQL + pgvector（仅 with-db profile 时启动）
   # ---------------------------------------------------------------
   db:
@@ -66,4 +77,5 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   # app_tmp:

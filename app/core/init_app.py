@@ -373,6 +373,16 @@ async def init_feishu_ws_clients():
         logger.warning(f"Feishu WS clients initialization skipped: {e}")
 
 
+async def init_redis():
+    """初始化 Redis 连接"""
+    from app.core.redis import init_redis as _init_redis
+
+    try:
+        await _init_redis()
+    except Exception as e:
+        logger.warning(f"Redis initialization skipped: {e}")
+
+
 async def init_data():
     await init_db()
     await init_superuser()
@@ -380,6 +390,7 @@ async def init_data():
     await init_apis()
     await init_roles()
     await init_vector_store()
+    await init_redis()
     await init_feishu_ws_clients()
     # 确保 media 存储目录存在
     from pathlib import Path
