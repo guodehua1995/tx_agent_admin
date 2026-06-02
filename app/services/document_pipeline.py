@@ -4,6 +4,7 @@ import time
 from app.controllers.ai_config import ai_config_controller
 from app.controllers.conversation import conversation_controller
 from app.controllers.feishu_bot import feishu_bot_controller
+from app.core.redis_lock import LockKey, RedisLock
 from app.models.admin import User
 from app.models.enums import DocumentStatus, DocumentTypeCode, FeishuPublishStatus
 from app.models.rag import (
@@ -33,33 +34,52 @@ class DocumentPipeline:
 
     # ==================== 阶段一：提取 ====================
 
+    # 单文档提取最长允许时间（秒）。PDF 多页 vision 提取较慢，给足余量。
+    _EXTRACT_LOCK_TTL = 1800
+
+    # 单文档向量化最长允许时间（秒）。合同切片 + 批量 embedding 可能十几分钟。
+    _VECTORIZE_LOCK_TTL = 1800
+
     async def process_document(self, doc_id: int):
-        """文档上传后：调提取层（按 doc_type_code 路由）→ 落 doc.content → 进入待审核"""
-        doc = await Document.get(id=doc_id)
+        """文档上传后：调提取层（按 doc_type_code 路由）→ 落 doc.content → 进入待审核
+
+        通过 Redis 分布式锁保证同一文档同一时刻只有一个提取任务在跑，
+        避免 HTTP 触发与 scheduler 补偿任务并发执行同一文档。
+        """
+        lock = RedisLock()
+        lock_key = f"{LockKey.DOCUMENT_PROCESS}:{doc_id}"
+        token = await lock.acquire(lock_key, ttl=self._EXTRACT_LOCK_TTL)
+        if not token:
+            logger.info(f"Document extraction skipped (already in progress): id={doc_id}")
+            return
+
         try:
-            result = await run_extraction(doc)
+            doc = await Document.get(id=doc_id)
+            try:
+                result = await run_extraction(doc)
 
-            # 回写 content + 增量 source_meta
-            doc.content = result.content
-            if result.source_meta_patch:
-                doc.source_meta = {**(doc.source_meta or {}), **result.source_meta_patch}
+                # 回写 content + 增量 source_meta
+                doc.content = result.content
+                if result.source_meta_patch:
+                    doc.source_meta = {**(doc.source_meta or {}), **result.source_meta_patch}
 
-            doc.status = DocumentStatus.EXTRACTED
-            await doc.save()
+                doc.status = DocumentStatus.EXTRACTED
+                await doc.save()
 
-            # EXTRACTED 是瞬态，立刻进入待审核
-            doc.status = DocumentStatus.PENDING_REVIEW
-            await doc.save()
-            logger.info(f"Document extracted: id={doc_id}, status=pending_review")
+                # EXTRACTED 是瞬态，立刻进入待审核
+                doc.status = DocumentStatus.PENDING_REVIEW
+                await doc.save()
+                logger.info(f"Document extracted: id={doc_id}, status=pending_review")
 
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED
-            doc.error_message = str(e)
-            await doc.save()
-            logger.exception(f"Document extraction failed: id={doc_id}")
+            except Exception as e:
+                doc.status = DocumentStatus.FAILED
+                doc.error_message = str(e)
+                await doc.save()
+                logger.exception(f"Document extraction failed: id={doc_id}")
+        finally:
+            await lock.release(lock_key, token)
 
     # ==================== 阶段二：审核后：切片 + 向量化 ====================
-            logger.exception(f"Document processing failed: id={doc_id}")
 
     async def _get_feishu_access_token(self) -> str:
         """获取飞书拉取机器人的 access_token 和 bot_config"""
@@ -187,57 +207,71 @@ class DocumentPipeline:
         )
 
     async def vectorize_document(self, doc_id: int):
-        """审核通过后: 切片（如需要）→ 向量化入库"""
-        doc = await Document.get(id=doc_id)
-        logger.info(f"Vectorizing document: id={doc_id}, name={doc.title}")
+        """审核通过后: 切片（如需要）→ 向量化入库
+
+        通过 Redis 分布式锁保证同一文档同一时刻只有一个向量化任务在跑，
+        避免 HTTP 触发与 scheduler 补偿任务并发导致重复入库。
+        """
+        lock = RedisLock()
+        lock_key = f"{LockKey.DOCUMENT_VECTORIZE}:{doc_id}"
+        token = await lock.acquire(lock_key, ttl=self._VECTORIZE_LOCK_TTL)
+        if not token:
+            logger.info(f"Document vectorization skipped (already in progress): id={doc_id}")
+            return
+
         try:
-            kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
+            doc = await Document.get(id=doc_id)
+            logger.info(f"Vectorizing document: id={doc_id}, name={doc.title}")
+            try:
+                kb = await KnowledgeBase.get(id=doc.knowledge_base_id)
 
-            # 先清理旧向量数据（重试场景下防止重复入库）
-            await chunk_service.delete_by_doc_id(doc_id)
-            logger.info(f"Cleaned up existing vectors before vectorize: doc_id={doc_id}")
+                # 先清理旧向量数据（重试场景下防止重复入库）
+                await chunk_service.delete_by_doc_id(doc_id)
+                logger.info(f"Cleaned up existing vectors before vectorize: doc_id={doc_id}")
 
-            # 合同类文档：使用审核后的最终原文 → 切片 → 逐条款入库
-            if doc.doc_type_code == DocumentTypeCode.CONTRACT:
-                await self._finalize_content_from_review(doc)
-                if doc.doc_type_code in SLICING_HANDLERS:
-                    doc.status = DocumentStatus.SLICING
+                # 合同类文档：使用审核后的最终原文 → 切片 → 逐条款入库
+                if doc.doc_type_code == DocumentTypeCode.CONTRACT:
+                    await self._finalize_content_from_review(doc)
+                    if doc.doc_type_code in SLICING_HANDLERS:
+                        doc.status = DocumentStatus.SLICING
+                        await doc.save()
+                        await self._run_slicing(doc)
+                    doc.status = DocumentStatus.VECTORIZING
                     await doc.save()
-                    await self._run_slicing(doc)
-                doc.status = DocumentStatus.VECTORIZING
-                await doc.save()
-                await self._vectorize_contract(doc, kb)
-            # 分页类型文档：从 DocumentPage 表逐页读取内容向量化
-            elif DocumentTypeCode.is_paged_type(doc.doc_type_code):
-                doc.status = DocumentStatus.VECTORIZING
-                await doc.save()
-                await self._vectorize_from_pages(doc, kb)
-            else:
-                # 非分页文档：优先使用切片产物，否则原始内容
-                doc.status = DocumentStatus.VECTORIZING
-                await doc.save()
-                final_content = doc.content
-                slicing = await SlicingResult.filter(document_id=doc_id).first()
-                if slicing:
-                    final_content = slicing.sliced_content
+                    await self._vectorize_contract(doc, kb)
+                # 分页类型文档：从 DocumentPage 表逐页读取内容向量化
+                elif DocumentTypeCode.is_paged_type(doc.doc_type_code):
+                    doc.status = DocumentStatus.VECTORIZING
+                    await doc.save()
+                    await self._vectorize_from_pages(doc, kb)
+                else:
+                    # 非分页文档：优先使用切片产物，否则原始内容
+                    doc.status = DocumentStatus.VECTORIZING
+                    await doc.save()
+                    final_content = doc.content
+                    slicing = await SlicingResult.filter(document_id=doc_id).first()
+                    if slicing:
+                        final_content = slicing.sliced_content
 
-                metadata = {"title": doc.title, "source_type": doc.source_type, "doc_type_code": doc.doc_type_code}
-                await rag_service.ingest_document(
-                    doc_id=str(doc.id),
-                    content=final_content,
-                    kb=kb,
-                    metadata=metadata,
-                )
+                    metadata = {"title": doc.title, "source_type": doc.source_type, "doc_type_code": doc.doc_type_code}
+                    await rag_service.ingest_document(
+                        doc_id=str(doc.id),
+                        content=final_content,
+                        kb=kb,
+                        metadata=metadata,
+                    )
 
-            doc.status = DocumentStatus.COMPLETED
-            await doc.save()
-            logger.info(f"Document vectorized: id={doc_id}")
+                doc.status = DocumentStatus.COMPLETED
+                await doc.save()
+                logger.info(f"Document vectorized: id={doc_id}")
 
-        except Exception as e:
-            doc.status = DocumentStatus.FAILED
-            doc.error_message = str(e)
-            await doc.save()
-            logger.exception(f"Document vectorization failed: id={doc_id}")
+            except Exception as e:
+                doc.status = DocumentStatus.FAILED
+                doc.error_message = str(e)
+                await doc.save()
+                logger.exception(f"Document vectorization failed: id={doc_id}")
+        finally:
+            await lock.release(lock_key, token)
 
     async def _finalize_content_from_review(self, doc: Document):
         """审核通过后拼出最终原文并回写 doc.content。"""

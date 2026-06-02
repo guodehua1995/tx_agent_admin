@@ -109,12 +109,20 @@ class BaseExtractor:
 
         DocumentPage.screenshot_url 字段语义为"对象 key"（如 pages/doc_3/page_1.png），
         前端展示前需经 file_storage.presign() 转换为可访问 URL。
+
+        幂等保障：写入前先按 document_id 清理旧记录，避免文档重试时
+        撞 (document_id, page_number) 唯一约束。
         """
         from app.services.file_storage import file_storage
 
         has_images = any(getattr(p, "image_bytes", None) for p in pages)
         if not has_images and len(pages) <= 1:
             return
+
+        # 清理同文档旧的分页记录（重试场景必需）
+        deleted = await DocumentPage.filter(document_id=doc.id).delete()
+        if deleted:
+            logger.info(f"Page records cleared before re-save: doc_id={doc.id}, deleted={deleted}")
 
         for page in pages:
             screenshot_key = None
