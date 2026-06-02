@@ -7,20 +7,23 @@ from datetime import datetime, timedelta
 
 from tortoise.expressions import Q
 
-from app.core.redis_lock import LockKey, RedisLock
+from app.core.redis import get_redis
+from app.core.redis_lock import LockKey
 from app.log import logger
 from app.models.enums import DocumentStatus
 from app.models.rag import Document
 from app.services.document_pipeline import document_pipeline
-
-_lock = RedisLock()
 
 # 中间态超时阈值（分钟）
 STUCK_THRESHOLD_MINUTES = 30
 
 
 async def compensate_pending_extract():
-    """补偿 pending_extract 状态的文档：重新执行提取流程"""
+    """补偿 pending_extract 状态的文档：重新执行提取流程
+
+    并发互斥交由 document_pipeline.process_document 内部的 Redis 锁保证：
+    如果文档正在被 HTTP 路径处理，这里会拿不到锁直接跳过。
+    """
     docs = await Document.filter(
         status=DocumentStatus.PENDING_EXTRACT,
         is_deleted=False,
@@ -32,29 +35,18 @@ async def compensate_pending_extract():
     logger.info(f"[Compensate] Found {len(docs)} pending_extract documents")
 
     for doc in docs:
-        key = f"{LockKey.DOCUMENT_PROCESS}:{doc.id}"
-        token = await _lock.acquire(key, ttl=300)
-        if not token:
-            logger.debug(f"[Compensate] Lock busy, skipping: doc_id={doc.id}")
-            continue
-
         try:
-            # 二次检查状态（正常路径可能刚完成）
-            fresh = await Document.get(id=doc.id)
-            if fresh.status != DocumentStatus.PENDING_EXTRACT or fresh.is_deleted:
-                logger.debug(f"[Compensate] Status changed, skip: doc_id={doc.id}")
-                continue
-
             logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
             await document_pipeline.process_document(doc.id)
         except Exception:
             logger.exception(f"[Compensate] process_document failed: doc_id={doc.id}")
-        finally:
-            await _lock.release(key, token)
 
 
 async def compensate_approved():
-    """补偿 approved 状态的文档：执行切片+向量化"""
+    """补偿 approved 状态的文档：执行切片+向量化
+
+    并发互斥交由 document_pipeline.vectorize_document 内部的 Redis 锁保证。
+    """
     docs = await Document.filter(
         status=DocumentStatus.APPROVED,
         is_deleted=False,
@@ -66,24 +58,11 @@ async def compensate_approved():
     logger.info(f"[Compensate] Found {len(docs)} approved documents")
 
     for doc in docs:
-        key = f"{LockKey.DOCUMENT_VECTORIZE}:{doc.id}"
-        token = await _lock.acquire(key, ttl=600)
-        if not token:
-            logger.debug(f"[Compensate] Lock busy, skipping: doc_id={doc.id}")
-            continue
-
         try:
-            fresh = await Document.get(id=doc.id)
-            if fresh.status != DocumentStatus.APPROVED or fresh.is_deleted:
-                logger.debug(f"[Compensate] Status changed, skip: doc_id={doc.id}")
-                continue
-
             logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
             await document_pipeline.vectorize_document(doc.id)
         except Exception:
             logger.exception(f"[Compensate] vectorize_document failed: doc_id={doc.id}")
-        finally:
-            await _lock.release(key, token)
 
 
 async def reset_stuck_documents():
@@ -91,6 +70,9 @@ async def reset_stuck_documents():
 
     这些文档可能是处理进程意外中断（如服务器重启）导致的，
     重置为 approved 后下一轮调度器会自动补偿。
+
+    并发安全：重置前检查向量化锁是否还在。锁还在说明任务真的在跑（
+    不是卡住），不应重置，避免与在跑任务产生并发。
     """
     threshold = datetime.now() - timedelta(minutes=STUCK_THRESHOLD_MINUTES)
     stuck_statuses = [DocumentStatus.SLICING, DocumentStatus.VECTORIZING]
@@ -104,7 +86,14 @@ async def reset_stuck_documents():
 
     logger.info(f"[Compensate] Found {len(docs)} stuck documents (>{STUCK_THRESHOLD_MINUTES}min)")
 
+    redis = get_redis()
     for doc in docs:
+        # 如果向量化锁还在，说明任务仍在执行（锁 TTL 已调到 1800s），不要重置
+        lock_key = f"{LockKey.DOCUMENT_VECTORIZE}:{doc.id}"
+        if await redis.exists(lock_key):
+            logger.debug(f"[Compensate] Vectorize lock alive, skip reset: doc_id={doc.id}")
+            continue
+
         old_status = doc.status
         doc.status = DocumentStatus.APPROVED
         await doc.save()
