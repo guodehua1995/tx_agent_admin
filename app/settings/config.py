@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     SCHEDULER_INTERVAL: int = 30            # 扫描间隔（秒）
     SCHEDULER_DEV_ONLY: bool = False        # True = 仅 development 环境执行调度
 
+    # 飞书文件夹监听（自动入库）
+    FEISHU_FOLDER_SCAN_ENABLED: bool = True             # 是否启用飞书文件夹扫描定时任务
+    FEISHU_FOLDER_SCAN_DEFAULT_INTERVAL: int = 600      # watch 默认扫描周期（秒）
+    FEISHU_FOLDER_SCAN_BATCH_LIMIT: int = 50            # 单 watch 单轮最多入队的新文件数
+    FEISHU_FOLDER_SCAN_MAX_FILES_PER_FOLDER: int = 5000 # 翻页拉取硬上限，防止异常巨大文件夹拖垮扫描
+
     # LangChain / LLM
     LLM_PROVIDER: str = "openai"
     LLM_MODEL_NAME: str = "gpt-4"
@@ -112,6 +118,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        case_sensitive = False   # 环境变量大小写不敏感，兼容 .env 小写写法
+        extra = "ignore"         # 忽略 .env / OS 环境里多余的变量，避免启动报错
 
 
 settings = Settings()
