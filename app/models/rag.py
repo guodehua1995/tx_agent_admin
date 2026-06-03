@@ -166,3 +166,53 @@ class DocumentPage(BaseModel, TimestampMixin):
     class Meta:
         table = "document_page"
         unique_together = (("document_id", "page_number"),)
+
+
+class FeishuFolderWatch(BaseModel, TimestampMixin):
+    """飞书云盘文件夹监听配置。定时扫描文件变化，新增文件自动入库。”"""
+
+    name = fields.CharField(max_length=100, description="文件夹显示名")
+    folder_token = fields.CharField(
+        max_length=200, unique=True, description="飞书 folder_token"
+    )
+    folder_url = fields.CharField(max_length=500, null=True, description="原始URL")
+    knowledge_base_id = fields.IntField(
+        description="入库目标知识库ID -> knowledge_base.id", index=True
+    )
+    doc_type_code = fields.CharEnumField(
+        DocumentTypeCode, description="入库走哪个文档类型处理器"
+    )
+    scan_interval_seconds = fields.IntField(default=600, description="扫描周期(秒)")
+    last_scanned_at = fields.DatetimeField(null=True, description="上次扫描时间")
+    last_scan_status = fields.CharField(
+        max_length=20, null=True, description="上次扫描状态: success/failed/running"
+    )
+    last_error = fields.TextField(null=True, description="上次失败原因")
+    is_active = fields.BooleanField(default=True, description="是否启用")
+    is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
+
+    class Meta:
+        table = "feishu_folder_watch"
+
+
+class FeishuFolderFile(BaseModel, TimestampMixin):
+    """飞书文件夹已扫描文件幂等表。幂等锁：(folder_watch_id, file_token) 唯一。"""
+
+    folder_watch_id = fields.IntField(
+        description="watch ID -> feishu_folder_watch.id", index=True
+    )
+    file_token = fields.CharField(max_length=200, description="飞书文件 token")
+    file_name = fields.CharField(max_length=500, description="文件名")
+    file_type = fields.CharField(max_length=50, null=True, description="飞书文件类型: file/docx/...")
+    feishu_modified_time = fields.BigIntField(
+        null=True, description="飞书侧修改时间戳")
+    document_id = fields.IntField(null=True, description="入库后的 Document.id")
+    ingest_status = fields.CharField(
+        max_length=20, default="pending",
+        description="入库状态: pending/ingested/skipped/failed",
+    )
+    ingest_error = fields.TextField(null=True, description="入库失败原因")
+
+    class Meta:
+        table = "feishu_folder_file"
+        unique_together = (("folder_watch_id", "file_token"),)

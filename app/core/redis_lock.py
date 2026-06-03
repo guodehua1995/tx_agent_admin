@@ -26,6 +26,7 @@ class LockKey(StrEnum):
     DOCUMENT_PROCESS = "tx_agent:lock:doc_process"
     DOCUMENT_VECTORIZE = "tx_agent:lock:doc_vectorize"
     SCHEDULER_SCAN = "tx_agent:lock:scheduler_scan"
+    FEISHU_FOLDER_SCAN = "tx_agent:lock:feishu_folder_scan"
 
 
 # ── 锁操作 ──────────────────────────────────────────────────────

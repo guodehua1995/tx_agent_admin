@@ -291,6 +291,66 @@ class FeishuService:
                 return match.group(1), doc_type
         raise ValueError(f"无法解析飞书文档URL: {url}")
 
+    def parse_feishu_folder_url(self, url_or_token: str) -> str:
+        """解析飞书文件夹 URL，返回 folder_token。
+
+        兼容两种输入：
+        - 完整 URL：https://xxx.feishu.cn/drive/folder/<token> 或 .../folder/<token>
+        - 裸 token。
+        """
+        if not url_or_token:
+            raise ValueError("文件夹地址不能为空")
+
+        # 带 URL 的情况
+        match = re.search(r"/(?:drive/)?folder/([A-Za-z0-9]+)", url_or_token)
+        if match:
+            return match.group(1)
+
+        # 裸 token：允许字母数字组合，不含斜杠与协议头
+        if "://" not in url_or_token and "/" not in url_or_token:
+            return url_or_token.strip()
+
+        raise ValueError(f"无法解析飞书文件夹地址: {url_or_token}")
+
+    async def list_files_in_folder(
+        self,
+        folder_token: str,
+        access_token: str,
+        page_size: int = 200,
+        max_files: int = 5000,
+    ) -> list[dict]:
+        """列出文件夹下所有文件（循环翻页直到 has_more=false）。
+
+        飞书未提供「文件夹文件总数」查询能力，只能通过分页逐页拉取。
+        GET /open-apis/drive/v1/files?folder_token=xxx&page_size=200&page_token=xxx
+        返回体：{files: [...], has_more: bool, next_page_token: str}
+
+        Args:
+            max_files: 超过该上限会提前终止并警告，避免异常巨大文件夹拖垮扫描。
+        """
+        files: list[dict] = []
+        page_token: Optional[str] = None
+        while True:
+            params: dict = {"folder_token": folder_token, "page_size": page_size}
+            if page_token:
+                params["page_token"] = page_token
+            data = await self._get("/drive/v1/files", auth_token=access_token, params=params)
+            payload = data.get("data") or {}
+            batch = payload.get("files") or []
+            files.extend(batch)
+            if len(files) >= max_files:
+                logger.warning(
+                    f"[FeishuFolder] file count exceeds max_files={max_files}, "
+                    f"truncated: folder_token={folder_token}"
+                )
+                break
+            if not payload.get("has_more"):
+                break
+            page_token = payload.get("next_page_token")
+            if not page_token:
+                break
+        return files
+
     async def download_file(self, file_token: str, access_token: str) -> tuple[bytes, str]:
         """下载飞书云空间文件
 

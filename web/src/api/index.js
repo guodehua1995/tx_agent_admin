@@ -89,6 +89,15 @@ export default {
   createFeishuBot: (data = {}) => request.post('/feishu/bot/create', data),
   updateFeishuBot: (data = {}) => request.post('/feishu/bot/update', data),
   deleteFeishuBot: (params = {}) => request.delete('/feishu/bot/delete', { params }),
+  // Feishu Folder Watch (飞书文件夹监听)
+  getFeishuFolderList: (params = {}) => request.get('/feishu_folder/list', { params }),
+  getFeishuFolder: (params = {}) => request.get('/feishu_folder/get', { params }),
+  createFeishuFolder: (data = {}) => request.post('/feishu_folder/create', data),
+  updateFeishuFolder: (data = {}) => request.post('/feishu_folder/update', data),
+  toggleFeishuFolder: (data = {}) => request.post('/feishu_folder/toggle', data),
+  deleteFeishuFolder: (params = {}) => request.delete('/feishu_folder/delete', { params }),
+  scanFeishuFolderNow: (params = {}) => request.post('/feishu_folder/scan_now', null, { params }),
+  getFeishuFolderFiles: (params = {}) => request.get('/feishu_folder/files', { params }),
   // Doc Template
   getDocTemplateList: (params = {}) => request.get('/doc_template/list', { params }),
   getDocTemplate: (params = {}) => request.get('/doc_template/get', { params }),
