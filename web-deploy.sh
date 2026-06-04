@@ -18,12 +18,47 @@ ACTION="${1:-deploy}"
 
 # ── 函数 ──
 
-do_build() {
-  if [ ! -d "$WEB_DIR/node_modules" ]; then
-    echo "[ERROR] 前端依赖未安装"
-    echo "[HINT]  cd web && pnpm install"
+ensure_deps() {
+  if [ ! -d "$WEB_DIR" ]; then
+    echo "[ERROR] 前端目录不存在: $WEB_DIR"
     exit 1
   fi
+
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "[ERROR] 未检测到 pnpm 命令"
+    echo "[HINT]  npm install -g pnpm"
+    exit 1
+  fi
+
+  local lock_file="$WEB_DIR/pnpm-lock.yaml"
+  local marker="$WEB_DIR/node_modules/.deps.md5"
+  local cur_md5=""
+  [ -f "$lock_file" ] && cur_md5=$(md5sum "$lock_file" | awk '{print $1}')
+  local last_md5=""
+  [ -f "$marker" ] && last_md5=$(cat "$marker")
+
+  if [ -d "$WEB_DIR/node_modules" ] && [ "$cur_md5" = "$last_md5" ] && [ -n "$cur_md5" ]; then
+    echo "[INFO] 前端依赖未变更，跳过安装"
+    return
+  fi
+
+  echo "[INFO] 前端依赖变更 / 首次安装，开始 pnpm install..."
+  cd "$WEB_DIR"
+  if [ -f "$lock_file" ]; then
+    pnpm install --frozen-lockfile || pnpm install
+  else
+    pnpm install
+  fi
+  cd "$PROJECT_DIR"
+
+  if [ -n "$cur_md5" ]; then
+    echo "$cur_md5" > "$marker"
+  fi
+  echo "[OK] 前端依赖安装完成"
+}
+
+do_build() {
+  ensure_deps
 
   echo "========================================="
   echo "  前端构建"
@@ -32,6 +67,7 @@ do_build() {
 
   cd "$WEB_DIR"
   pnpm run build
+  cd "$PROJECT_DIR"
 
   if [ -f "$DIST_DIR/index.html" ]; then
     echo "[OK] 构建成功: $DIST_DIR"

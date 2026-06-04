@@ -42,6 +42,46 @@ check_venv() {
   fi
 }
 
+ensure_deps() {
+  # 1）虚拟环境不存在则创建
+  if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "[INFO] 虚拟环境不存在，开始创建: $VENV_DIR"
+    if command -v uv >/dev/null 2>&1; then
+      uv venv "$VENV_DIR" --python 3.11
+    else
+      python3 -m venv "$VENV_DIR"
+    fi
+    echo "[OK] 虚拟环境创建完成"
+  fi
+
+  # 2）依据 requirements.txt md5 判断是否需要重装依赖
+  local req_file="$PROJECT_DIR/requirements.txt"
+  if [ ! -f "$req_file" ]; then
+    echo "[WARN] 未找到 requirements.txt，跳过依赖检查"
+    return
+  fi
+  local marker="$VENV_DIR/.deps.md5"
+  local cur_md5
+  cur_md5=$(md5sum "$req_file" | awk '{print $1}')
+  local last_md5=""
+  [ -f "$marker" ] && last_md5=$(cat "$marker")
+
+  if [ "$cur_md5" = "$last_md5" ]; then
+    echo "[INFO] Python 依赖未变更，跳过安装"
+    return
+  fi
+
+  echo "[INFO] 检测到依赖变更 / 首次启动，开始安装 Python 依赖..."
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install -r "$req_file" --python "$VENV_DIR/bin/python"
+  else
+    "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
+    "$VENV_DIR/bin/pip" install -r "$req_file"
+  fi
+  echo "$cur_md5" > "$marker"
+  echo "[OK] Python 依赖安装完成"
+}
+
 get_pid() {
   [ -f "$PID_FILE" ] && cat "$PID_FILE"
 }
@@ -53,7 +93,7 @@ is_running() {
 
 do_start() {
   check_env_file
-  check_venv
+  ensure_deps
 
   if is_running; then
     echo "[WARN] 已在运行 (PID: $(get_pid))，无需重复启动"
