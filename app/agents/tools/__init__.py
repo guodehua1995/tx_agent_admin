@@ -14,6 +14,8 @@ from app.log import logger
 from .base import BaseToolProvider, adapt_to_langchain, adapt_to_llamaindex
 from .current_time_tool import CurrentTimeToolProvider
 from .doc_template_tool import DocTemplateToolProvider
+from .kd_doc_lookup_tool import KdDocLookupToolProvider
+from .kd_doc_meta_tool import KdDocMetaToolProvider
 from .kd_vector_query_tool import KdVectorQueryToolProvider
 from .web_reader_tool import WebReaderToolProvider
 
@@ -24,6 +26,8 @@ __all__ = [
     "build_chat_tools",
     "CurrentTimeToolProvider",
     "DocTemplateToolProvider",
+    "KdDocLookupToolProvider",
+    "KdDocMetaToolProvider",
     "KdVectorQueryToolProvider",
     "WebReaderToolProvider",
 ]
@@ -66,7 +70,31 @@ async def build_chat_tools(
                 chat_model_config=chat_model_config,
             ))
 
-    # 2. 文档模板工具
+    # 2. 知识库文档元信息查询工具
+    if knowledge_bases:
+        meta_provider = KdDocMetaToolProvider()
+        if framework == "llamaindex":
+            tools.extend(await meta_provider.build_llamaindex_tools(
+                knowledge_bases=knowledge_bases,
+            ))
+        else:
+            tools.extend(await meta_provider.build_langchain_tools(
+                knowledge_bases=knowledge_bases,
+            ))
+
+    # 3. 知识库文档按名检索与摘要查询工具
+    if knowledge_bases:
+        lookup_provider = KdDocLookupToolProvider()
+        if framework == "llamaindex":
+            tools.extend(await lookup_provider.build_llamaindex_tools(
+                knowledge_bases=knowledge_bases,
+            ))
+        else:
+            tools.extend(await lookup_provider.build_langchain_tools(
+                knowledge_bases=knowledge_bases,
+            ))
+
+    # 4. 文档模板工具
     if doc_templates:
         tpl_provider = DocTemplateToolProvider(doc_templates)
         if framework == "llamaindex":
@@ -74,14 +102,14 @@ async def build_chat_tools(
         else:
             tools.extend(await tpl_provider.build_langchain_tools())
 
-    # 3. 网络内容读取工具（默认始终添加）
+    # 5. 网络内容读取工具（默认始终添加）
     web_provider = WebReaderToolProvider()
     if framework == "llamaindex":
         tools.extend(await web_provider.build_llamaindex_tools())
     else:
         tools.extend(await web_provider.build_langchain_tools())
 
-    # 4. 当前系统时间工具（默认始终添加）
+    # 6. 当前系统时间工具（默认始终添加）
     time_provider = CurrentTimeToolProvider()
     if framework == "llamaindex":
         tools.extend(await time_provider.build_llamaindex_tools())

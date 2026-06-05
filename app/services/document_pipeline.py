@@ -394,6 +394,15 @@ class DocumentPipeline:
         if not clauses:
             raise ValueError("合同解析后无有效条款")
 
+        # 将 clause_index=0（概要）同步写入 Document.summary
+        summary_clause = next((c for c in clauses if int(c.get("clause_index", -1)) == 0), None)
+        if summary_clause:
+            summary_text = (summary_clause.get("content") or "").strip()
+            if summary_text:
+                doc.summary = summary_text
+                await doc.save(update_fields=["summary"])
+                logger.info(f"Document summary synced from clause_0: doc_id={doc.id}")
+
         embedding_config = await LLMProviderConfig.get(id=kb.embedding_model_id)
         embed_model = build_embed_model(embedding_config)
 

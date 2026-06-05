@@ -54,6 +54,7 @@ class Document(BaseModel, TimestampMixin):
     source_type = fields.CharEnumField(DocumentSourceType, description="来源类型")
     source_meta = fields.JSONField(null=True, description="来源元数据")
     content = fields.TextField(null=True, description="清洗后的文本内容")
+    summary = fields.TextField(null=True, description="文档概述摘要")
     doc_type_code = fields.CharEnumField(DocumentTypeCode, default=DocumentTypeCode.FEISHU_DOC, description="文档类型编码")
     knowledge_base_id = fields.IntField(description="知识库ID -> knowledge_base.id")
     status = fields.CharEnumField(DocumentStatus, default=DocumentStatus.PENDING_EXTRACT, description="处理状态")
