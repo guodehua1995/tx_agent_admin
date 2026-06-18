@@ -25,6 +25,13 @@ class FeishuService:
     def __init__(self):
         self._base_url = settings.FEISHU_BASE_URL
         self._verify_ssl = settings.FEISHU_VERIFY_SSL
+        # 复用连接池，避免并发时大量短连接导致 ConnectTimeout
+        # timeout: 连接/读取均设 30s，应对飞书 API 偶发慢响应
+        self._client = httpx.AsyncClient(
+            verify=self._verify_ssl,
+            timeout=httpx.Timeout(30.0, connect=15.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
 
     async def _request(
         self,
@@ -39,9 +46,8 @@ class FeishuService:
         if auth_token:
             headers.setdefault("Authorization", f"Bearer {auth_token}")
 
-        async with httpx.AsyncClient(verify=self._verify_ssl) as client:
-            resp = await client.request(method, url, headers=headers, **kwargs)
-            data = resp.json()
+        resp = await self._client.request(method, url, headers=headers, **kwargs)
+        data = resp.json()
 
         code = data.get("code")
         if code is not None and code != 0:
