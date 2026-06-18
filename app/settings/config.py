@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     FEISHU_FOLDER_SCAN_DEFAULT_INTERVAL: int = 600      # watch 默认扫描周期（秒）
     FEISHU_FOLDER_SCAN_BATCH_LIMIT: int = 50            # 单 watch 单轮最多入队的新文件数
     FEISHU_FOLDER_SCAN_MAX_FILES_PER_FOLDER: int = 5000 # 翻页拉取硬上限，防止异常巨大文件夹拖垮扫描
+    FEISHU_FOLDER_PROCESS_CONCURRENCY: int = 3          # 飞书扫描触发的文档处理最大并发数
 
     # LangChain / LLM
     LLM_PROVIDER: str = "openai"
