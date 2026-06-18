@@ -87,11 +87,14 @@ class ChunkService:
         logger.info(f"Chunk deleted: node_id={node_id}")
 
     async def delete_by_doc_id(self, doc_id: int):
-        """删除某文档的全部切片（供文档删除时调用）"""
-        from app.services.rag_service import rag_service
-
-        await rag_service.delete_document(str(doc_id))
-        logger.info(f"All chunks deleted for doc_id={doc_id}")
+        """删除某文档的全部切片 + 向量（按 source_doc_id 精确匹配）"""
+        conn = await self._get_connection()
+        result = await conn.execute_query(
+            f"DELETE FROM {self._table_name} WHERE metadata_->>'source_doc_id' = $1",
+            [str(doc_id)],
+        )
+        count = result[0] if isinstance(result, tuple) else 0
+        logger.info(f"Chunks deleted for doc_id={doc_id}: count={count}")
 
     async def get_adjacent_chunks(
         self, node_id: str, doc_id: str, window: int = 1,

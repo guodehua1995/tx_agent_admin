@@ -101,3 +101,21 @@ class ChunkMode(StrEnum):
     SENTENCE = "sentence"
     MARKDOWN = "markdown"
     HIERARCHICAL = "hierarchical"
+
+
+# ========== 报价模块枚举 ==========
+
+
+class QuotationRuleStatus(StrEnum):
+    """报价规则状态"""
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    ACTIVE = "active"
+    EXPIRED = "expired"  # 已失效（被新版本替代或手动取消）
+    ARCHIVED = "archived"
+
+
+class RuleSourceType(StrEnum):
+    """规则来源"""
+    MANUAL = "manual"
+    EXCEL_IMPORT = "excel_import"
