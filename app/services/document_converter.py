@@ -217,14 +217,12 @@ async def _call_vision_llm(
         if attempt < total_attempts:
             backoff = min(2 ** (attempt - 1), 10)
             logger.warning(
-                "[VisionLLM] page %d call failed (attempt %d/%d, %s), retry in %ds",
-                page_num, attempt, total_attempts, err_repr, backoff,
+                f"[VisionLLM] page {page_num} call failed (attempt {attempt}/{total_attempts}, {err_repr}), retry in {backoff}ds"
             )
             await asyncio.sleep(backoff)
         else:
             logger.error(
-                "[VisionLLM] page %d call exhausted retries (%d attempts), last error: %s",
-                page_num, total_attempts, err_repr,
+                f"[VisionLLM] page {page_num} call exhausted retries ({total_attempts} attempts), last error: {err_repr}"
             )
 
     raise ConversionError(
