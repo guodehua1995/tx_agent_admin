@@ -1,5 +1,3 @@
-import shutil
-
 from aerich import Command
 from fastapi import FastAPI
 from fastapi.middleware import Middleware
@@ -304,13 +302,11 @@ async def init_db():
 
     await command.init()
     try:
-        await command.migrate()
-    except AttributeError:
-        logger.warning("unable to retrieve model history from database, model history will be created from scratch")
-        shutil.rmtree("migrations")
-        await command.init_db(safe=True)
-
-    await command.upgrade(run_in_transaction=True)
+        await command.upgrade(run_in_transaction=True)
+        logger.info("[InitDB] Database migration completed")
+    except Exception as e:
+        logger.error(f"[InitDB] Migration failed: {e}. Please run 'aerich upgrade' manually.")
+        raise
 
 
 async def init_roles():
