@@ -46,6 +46,11 @@ class Settings(BaseSettings):
                         "user": self.DB_USER,
                         "password": self.DB_PASSWORD,
                         "database": self.DB_NAME,
+                        # 连接池保活：防止空闲连接被服务端/网络设备静默断开
+                        "minsize": 2,                                       # 最小空闲连接数(Tortoise参数名为minsize)
+                        "maxsize": 10,                                      # 最大连接数(Tortoise参数名为maxsize)
+                        "max_inactive_connection_lifetime": 300,             # 空闲超5分钟自动回收(asyncpg pool参数)
+                        "command_timeout": 30,                              # 单条SQL超时(秒)(asyncpg connect参数)
                     },
                 },
             },
@@ -100,6 +105,7 @@ class Settings(BaseSettings):
     SCHEDULER_ENABLED: bool = True          # 是否启用定时调度器
     SCHEDULER_INTERVAL: int = 30            # 扫描间隔（秒）
     SCHEDULER_DEV_ONLY: bool = False        # True = 仅 development 环境执行调度
+    COMPENSATE_CONCURRENCY: int = 5         # 文档补偿任务最大并发数
 
     # 飞书文件夹监听（自动入库）
     FEISHU_FOLDER_SCAN_ENABLED: bool = True             # 是否启用飞书文件夹扫描定时任务

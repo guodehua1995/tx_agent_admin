@@ -7,7 +7,7 @@ from tortoise.expressions import Q
 
 from app.controllers.feishu_folder import feishu_folder_controller
 from app.models.enums import DocumentTypeCode
-from app.models.rag import FeishuFolderFile, FeishuFolderWatch, KnowledgeBase
+from app.models.rag import Document, FeishuFolderFile, FeishuFolderWatch, KnowledgeBase
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.feishu_folders import (
     FeishuFolderCreate,
@@ -96,6 +96,8 @@ async def create_folder(body: FeishuFolderCreate):
         knowledge_base_id=body.knowledge_base_id,
         doc_type_code=body.doc_type_code,
         scan_interval_seconds=body.scan_interval_seconds or 600,
+        auto_approve=body.auto_approve if body.auto_approve is not None else False,
+        recursive_scan=body.recursive_scan if body.recursive_scan is not None else False,
         is_active=body.is_active if body.is_active is not None else True,
     )
     logger.info("[FeishuFolder] Created: name=%s, token=%s, id=%s", body.name, folder_token, obj.id)
@@ -169,4 +171,36 @@ async def list_folder_files(
         .limit(page_size)
     )
     data = [await obj.to_dict() for obj in objs]
+
+    # 批量查询关联 Document 的处理状态
+    doc_ids = [obj.document_id for obj in objs if obj.document_id]
+    if doc_ids:
+        docs = await Document.filter(id__in=doc_ids).values("id", "status", "error_message")
+        doc_map = {d["id"]: d for d in docs}
+        for item in data:
+            did = item.get("document_id")
+            if did and did in doc_map:
+                item["doc_status"] = doc_map[did]["status"]
+                item["doc_error_message"] = doc_map[did]["error_message"]
+            else:
+                item["doc_status"] = None
+                item["doc_error_message"] = None
+    else:
+        for item in data:
+            item["doc_status"] = None
+            item["doc_error_message"] = None
+
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
+
+
+@router.post("/files/cleanup", summary="清理飞书侧已删除的文件")
+async def cleanup_deleted_file(
+    folder_id: int = Query(..., description="文件夹监听ID"),
+    file_token: str = Query(..., description="飞书文件token"),
+):
+    """人工清理飞书侧已删除的文件：联动删除 Document + 向量 + 切片 + 页面。"""
+    try:
+        await feishu_folder_scan_service.cleanup_deleted_file(folder_id, file_token)
+    except ValueError as e:
+        return Fail(msg=str(e))
+    return Success(msg="清理完成")

@@ -184,6 +184,8 @@ class FeishuFolderWatch(BaseModel, TimestampMixin):
         DocumentTypeCode, description="入库走哪个文档类型处理器"
     )
     scan_interval_seconds = fields.IntField(default=600, description="扫描周期(秒)")
+    auto_approve = fields.BooleanField(default=False, description="自动审批(跳过人工审核)")
+    recursive_scan = fields.BooleanField(default=False, description="是否递归扫描子文件夹")
     last_scanned_at = fields.DatetimeField(null=True, description="上次扫描时间")
     last_scan_status = fields.CharField(
         max_length=20, null=True, description="上次扫描状态: success/failed/running"

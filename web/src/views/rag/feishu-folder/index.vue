@@ -44,6 +44,20 @@ const ingestStatusMap = {
   ingested: { label: '已入库', type: 'success' },
   failed: { label: '失败', type: 'error' },
   skipped: { label: '跳过', type: 'warning' },
+  feishu_deleted: { label: '飞书已删除', type: 'error' },
+  cleaned: { label: '已清理', type: 'default' },
+}
+
+const docStatusMap = {
+  pending_extract: { label: '待提取', type: 'default' },
+  extracted: { label: '已提取', type: 'info' },
+  pending_review: { label: '待审核', type: 'warning' },
+  approved: { label: '已审核', type: 'info' },
+  slicing: { label: '切片中', type: 'info' },
+  vectorizing: { label: '向量化中', type: 'info' },
+  completed: { label: '已完成', type: 'success' },
+  rejected: { label: '已驳回', type: 'error' },
+  failed: { label: '处理失败', type: 'error' },
 }
 
 const scanStatusMap = {
@@ -66,7 +80,7 @@ const {
   modalFormRef,
 } = useCRUD({
   name: '文件夹监听',
-  initForm: { is_active: true, scan_interval_seconds: 600 },
+  initForm: { is_active: true, scan_interval_seconds: 600, auto_approve: false, recursive_scan: false },
   doCreate: (data) => {
     const payload = {
       name: data.name,
@@ -74,6 +88,8 @@ const {
       knowledge_base_id: data.knowledge_base_id,
       doc_type_code: data.doc_type_code,
       scan_interval_seconds: data.scan_interval_seconds || 600,
+      auto_approve: data.auto_approve ?? false,
+      recursive_scan: data.recursive_scan ?? false,
       is_active: data.is_active,
     }
     return api.createFeishuFolder(payload)
@@ -86,6 +102,8 @@ const {
       knowledge_base_id: data.knowledge_base_id,
       doc_type_code: data.doc_type_code,
       scan_interval_seconds: data.scan_interval_seconds,
+      auto_approve: data.auto_approve,
+      recursive_scan: data.recursive_scan,
       is_active: data.is_active,
     }
     return api.updateFeishuFolder(payload)
@@ -137,6 +155,17 @@ async function handleScanNow(row) {
   }
 }
 
+// ========== 清理飞书已删除文件 ==========
+async function handleCleanupFile(row) {
+  try {
+    await api.cleanupFeishuFolderFile({ folder_id: currentFolder.value.id, file_token: row.file_token })
+    $message.success('清理完成')
+    loadFiles()
+  } catch (e) {
+    $message.error(e.message || '清理失败')
+  }
+}
+
 // ========== 文件清单 Drawer ==========
 const filesDrawerVisible = ref(false)
 const filesLoading = ref(false)
@@ -153,6 +182,8 @@ const fileStatusOptions = [
   { label: '已入库', value: 'ingested' },
   { label: '失败', value: 'failed' },
   { label: '跳过', value: 'skipped' },
+  { label: '飞书已删除', value: 'feishu_deleted' },
+  { label: '已清理', value: 'cleaned' },
 ]
 
 async function openFilesDrawer(row) {
@@ -223,12 +254,24 @@ const fileColumns = [
     },
   },
   {
+    title: '文档处理状态',
+    key: 'doc_status',
+    width: 120,
+    align: 'center',
+    render(row) {
+      if (!row.doc_status) return h('span', '-')
+      const s = docStatusMap[row.doc_status] || { label: row.doc_status, type: 'default' }
+      return h(NTag, { type: s.type, size: 'small' }, { default: () => s.label })
+    },
+  },
+  {
     title: '错误信息',
     key: 'ingest_error',
     width: 220,
     ellipsis: { tooltip: true },
     render(row) {
-      return h('span', { style: 'color: #d03050;' }, row.ingest_error || '-')
+      const err = row.ingest_error || row.doc_error_message
+      return h('span', { style: 'color: #d03050;' }, err || '-')
     },
   },
   {
@@ -238,6 +281,27 @@ const fileColumns = [
     align: 'center',
     render(row) {
       return h('span', formatDate(row.created_at))
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 100,
+    align: 'center',
+    render(row) {
+      if (row.ingest_status !== 'feishu_deleted') return h('span', '-')
+      return h(
+        NPopconfirm,
+        { onPositiveClick: () => handleCleanupFile(row) },
+        {
+          trigger: () => h(
+            NButton,
+            { size: 'small', type: 'error', quaternary: true },
+            { default: () => '清理', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+          ),
+          default: () => h('div', {}, `确定清理该文件？将删除关联文档及向量数据。`),
+        }
+      )
     },
   },
 ]
@@ -285,6 +349,28 @@ const columns = [
     key: 'scan_interval_seconds',
     width: 110,
     align: 'center',
+  },
+  {
+    title: '自动审批',
+    key: 'auto_approve',
+    width: 90,
+    align: 'center',
+    render(row) {
+      return h(NTag, { type: row.auto_approve ? 'success' : 'default', size: 'small' }, {
+        default: () => row.auto_approve ? '是' : '否',
+      })
+    },
+  },
+  {
+    title: '递归扫描',
+    key: 'recursive_scan',
+    width: 90,
+    align: 'center',
+    render(row) {
+      return h(NTag, { type: row.recursive_scan ? 'info' : 'default', size: 'small' }, {
+        default: () => row.recursive_scan ? '是' : '否',
+      })
+    },
   },
   {
     title: '上次扫描',
@@ -544,6 +630,14 @@ onMounted(() => {
             placeholder="留空使用默认 600 秒"
             style="width: 100%"
           />
+        </NFormItem>
+        <NFormItem label="自动审批" path="auto_approve">
+          <NSwitch v-model:value="modalForm.auto_approve" />
+          <span style="margin-left: 8px; color: #999; font-size: 12px;">跳过人工审核，自动进入向量化</span>
+        </NFormItem>
+        <NFormItem label="递归扫描" path="recursive_scan">
+          <NSwitch v-model:value="modalForm.recursive_scan" />
+          <span style="margin-left: 8px; color: #999; font-size: 12px;">扫描子文件夹中的文件</span>
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />

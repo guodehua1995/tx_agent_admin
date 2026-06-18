@@ -149,42 +149,14 @@ class DocumentPipeline:
 
     async def _process_uploaded_file(self, doc: Document) -> str:
         """处理上传的文件：读取 → 文档转换器 → Markdown"""
-        meta = doc.source_meta or {}
-        file_path = meta.get("file_path", "")
-        if not file_path:
-            raise ValueError("文件路径为空")
-
-        ext = Path(file_path).suffix.lstrip(".").lower()
-
-        # 如果是文档转换器支持的类型，走转换器
-        if ext in CONVERTIBLE_EXTENSIONS:
-            with open(file_path, "rb") as f:
-                file_bytes = f.read()
-            filename = Path(file_path).name
-            pages = await document_converter.convert(file_bytes, ext, filename)
-            await BaseExtractor._save_page_records(doc, pages)
-            markdown_content = document_converter.pages_to_markdown(pages)
-           
-            doc_token, doc_type = feishu_service.parse_feishu_url(file_path)
-            doc.source_meta = {**meta,"feishu_doc_token": doc_token, "feishu_doc_type": doc_type, "file_type": ext, "page_count": len(pages)}
-            return markdown_content
-
-        # 其他类型尝试作为纯文本读取
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+        # 报错 目前不支持上传文件
+        raise ValueError("目前不支持上传文件")
 
     async def _fetch_web_content(self, doc: Document) -> str:
         """抓取网页内容"""
-        import httpx
-
-        meta = doc.source_meta or {}
-        url = meta.get("url", "")
-        if not url:
-            raise ValueError("URL 为空")
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, follow_redirects=True)
-            return resp.text
+        # 报错 目前不支持抓取网页内容
+        raise ValueError("目前不支持抓取网页内容")
+    
 
     async def _run_structuring(self, doc: Document):
         """执行结构化处理"""

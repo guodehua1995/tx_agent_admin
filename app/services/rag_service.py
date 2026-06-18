@@ -109,24 +109,16 @@ class RAGService:
         logger.info(f"Document ingested: doc_id={doc_id}, kb={kb.name}")
 
     async def delete_document(self, doc_id: str):
-        """删除文档的所有向量（按 metadata_.source_doc_id 匹配删除）"""
+        """删除文档的所有向量（按 source_doc_id 匹配删除）"""
         if not self._vector_store:
             logger.warning(f"Vector store not initialized, skip deleting vectors for doc_id={doc_id}")
             return
-        try:
-            # 按新字段 source_doc_id 删除（新入库的数据）
-            filters = MetadataFilters(
-                filters=[ExactMatchFilter(key="source_doc_id", value=doc_id)]
-            )
-            await self._vector_store.adelete_nodes(filters=filters)
-            # 兼容旧数据：旧数据中 LlamaIndex 覆盖的 doc_id 对普通文档仍然有效
-            filters_legacy = MetadataFilters(
-                filters=[ExactMatchFilter(key="doc_id", value=doc_id)]
-            )
-            await self._vector_store.adelete_nodes(filters=filters_legacy)
-            logger.info(f"Document vectors deleted: doc_id={doc_id}")
-        except Exception:
-            logger.exception(f"Failed to delete vectors for doc_id={doc_id}")
+        # 按 source_doc_id 删除
+        filters = MetadataFilters(
+            filters=[ExactMatchFilter(key="source_doc_id", value=doc_id)]
+        )
+        await self._vector_store.adelete_nodes(filters=filters)
+        logger.info(f"Document vectors deleted: doc_id={doc_id}")
 
     async def delete_by_knowledge_base(self, kb_id: int):
         """删除知识库所有向量"""

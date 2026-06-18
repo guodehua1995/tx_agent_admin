@@ -27,6 +27,8 @@ class LockKey(StrEnum):
     DOCUMENT_VECTORIZE = "tx_agent:lock:doc_vectorize"
     SCHEDULER_SCAN = "tx_agent:lock:scheduler_scan"
     FEISHU_FOLDER_SCAN = "tx_agent:lock:feishu_folder_scan"
+    # 标记该 Document 由飞书文件夹监听托管，补偿任务跳过
+    FEISHU_FOLDER_INGEST = "tx_agent:lock:feishu_folder_ingest"
 
 
 # ── 锁操作 ──────────────────────────────────────────────────────
