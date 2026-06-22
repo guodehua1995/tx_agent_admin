@@ -18,7 +18,6 @@ from .kd_doc_lookup_tool import KdDocLookupToolProvider
 from .kd_doc_meta_tool import KdDocMetaToolProvider
 from .kd_vector_query_tool import KdVectorQueryToolProvider
 from .web_reader_tool import WebReaderToolProvider
-from .quotation_rule_tool import QuotationRuleToolProvider
 
 __all__ = [
     "BaseToolProvider",
@@ -31,7 +30,6 @@ __all__ = [
     "KdDocMetaToolProvider",
     "KdVectorQueryToolProvider",
     "WebReaderToolProvider",
-    "QuotationRuleToolProvider",
 ]
 
 
@@ -117,12 +115,5 @@ async def build_chat_tools(
         tools.extend(await time_provider.build_llamaindex_tools())
     else:
         tools.extend(await time_provider.build_langchain_tools())
-
-    # 7. 报价规则查询工具（默认始终添加）
-    quotation_provider = QuotationRuleToolProvider()
-    if framework == "llamaindex":
-        tools.extend(await quotation_provider.build_llamaindex_tools())
-    else:
-        tools.extend(await quotation_provider.build_langchain_tools())
 
     return tools

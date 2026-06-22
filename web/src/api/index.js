@@ -135,30 +135,4 @@ export default {
   getDocPages: (params = {}) => request.get('/doc_page/list', { params }),
   getDocPageDetail: (params = {}) => request.get('/doc_page/detail', { params }),
   updateDocPageContent: (data = {}) => request.post('/doc_page/update_content', data),
-  // ── 报价模块 ──────────────────────────────────────────
-  // 甲方
-  getClientList: (params = {}) => request.get('/quotation/client/list', { params }),
-  createClient: (data = {}) => request.post('/quotation/client/create', data),
-  updateClient: (data = {}) => request.put('/quotation/client/update', data, { params: { id: data.id } }),
-  deleteClient: (params = {}) => request.delete('/quotation/client/delete', { params }),
-  // 报价规则
-  getRuleList: (params = {}) => request.get('/quotation/rule/list', { params }),
-  getRuleDetail: (params = {}) => request.get('/quotation/rule/detail', { params }),
-  createRule: (data = {}) => request.post('/quotation/rule/create', data),
-  submitRule: (data = {}) => request.post('/quotation/rule/submit', data),
-  editDraft: (data = {}) => request.put('/quotation/rule/edit_draft', data),
-  editNewVersion: (data = {}) => request.post('/quotation/rule/edit_new_version', data),
-  cancelRule: (data = {}) => request.post('/quotation/rule/cancel', data),
-  deleteRule: (params = {}) => request.delete('/quotation/rule/delete', { params }),
-  // 审批
-  getApprovalList: (params = {}) => request.get('/quotation/approval/list', { params }),
-  doApproval: (data = {}) => request.post('/quotation/approval/action', data),
-  // Excel
-  parseExcel: (data) => request.post('/quotation/excel/parse', data, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }),
-  importExcel: (data = {}) => request.post('/quotation/excel/import', data),
-  // 归档
-  getArchiveList: (params = {}) => request.get('/quotation/archive/list', { params }),
-  getArchiveDetail: (params = {}) => request.get('/quotation/archive/detail', { params }),
 }
