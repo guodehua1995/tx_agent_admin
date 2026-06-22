@@ -31,7 +31,7 @@ async def compensate_pending_extract():
     """补偿 pending_extract 状态的文档：并发执行提取流程
 
     - 并发数由 settings.COMPENSATE_CONCURRENCY 控制，防止多文档同时提取压年事件循环
-    - 并发互斥交由 document_pipeline.process_document 内部的 Redis 锁保证
+    - 并发互斥交由 document_pipeline.extract 内部的 Redis 锁保证
     - 飞书文件夹托管的文档（FEISHU_FOLDER_INGEST 标记锁）会跳过
     """
     docs = await Document.filter(
@@ -62,9 +62,9 @@ async def compensate_pending_extract():
         async with sem:
             try:
                 logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
-                await document_pipeline.process_document(doc.id)
+                await document_pipeline.extract(doc.id)
             except Exception:
-                logger.exception(f"[Compensate] process_document failed: doc_id={doc.id}")
+                logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
 
     await asyncio.gather(*[_run_one_extract(d) for d in candidates])
 
@@ -73,7 +73,7 @@ async def compensate_approved():
     """补偿 approved 状态的文档：并发执行切片+向量化
 
     - 并发数由 settings.COMPENSATE_CONCURRENCY 控制
-    - 并发互斥交由 document_pipeline.vectorize_document 内部的 Redis 锁保证
+    - 并发互斥交由 document_pipeline.vectorize 内部的 Redis 锁保证
     - 飞书文件夹托管的文档（auto_approve 路径）同样跳过
     """
     docs = await Document.filter(
@@ -104,9 +104,9 @@ async def compensate_approved():
         async with sem:
             try:
                 logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
-                await document_pipeline.vectorize_document(doc.id)
+                await document_pipeline.vectorize(doc.id)
             except Exception:
-                logger.exception(f"[Compensate] vectorize_document failed: doc_id={doc.id}")
+                logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
 
     await asyncio.gather(*[_run_one_vectorize(d) for d in candidates])
 

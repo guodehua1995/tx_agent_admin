@@ -56,7 +56,7 @@ const providerTypeOptions = [
 async function handleTest(row) {
   try {
     const res = await api.testAiConfig({ config_id: row.id })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('连接测试成功')
     } else {
       $message?.error(res.msg || '连接测试失败')

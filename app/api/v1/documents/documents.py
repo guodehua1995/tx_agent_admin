@@ -76,7 +76,7 @@ async def create_document(doc_in: DocumentCreate, background_tasks: BackgroundTa
     obj_dict = doc_in.model_dump()
     obj_dict["uploader_id"] = CTX_USER_ID.get()
     obj = await document_controller.create(obj_dict)
-    background_tasks.add_task(document_pipeline.process_document, obj.id)
+    background_tasks.add_task(document_pipeline.extract, obj.id)
     logger.info("[Document] Created: title=%s, id=%s", doc_in.title, obj.id)
     return Success(msg="文档创建成功，后台处理中", data={"id": obj.id})
 
@@ -106,25 +106,14 @@ async def retry_document(document_id: int = Query(..., description="文档ID"), 
     if doc.status not in ("failed", "rejected"):
         return Fail(msg="只能重试失败或被驳回的文档")
 
-    # 已提取过内容的文档（之前审批通过但在向量化阶段失败），直接重新向量化，无需重新提取和审批
-    if doc.content and doc.status == "failed":
-        background_tasks.add_task(document_pipeline.vectorize_document, document_id)
-        logger.info("[Document] Retry vectorize queued: id=%s", document_id)
-    else:
-        background_tasks.add_task(document_pipeline.process_document, document_id)
-        logger.info("[Document] Retry process queued: id=%s", document_id)
+    background_tasks.add_task(document_pipeline.retry, document_id)
+    logger.info("[Document] Retry queued: id=%s", document_id)
     return Success(msg="已加入重试队列")
 
 
 @router.post("/update_content", summary="编辑文档内容并重新提审")
 async def update_document_content(body: DocumentSubmitForReview):
-    doc = await document_controller.get(id=body.id)
-    if doc.status != DocumentStatus.REJECTED:
-        return Fail(msg="只有被驳回的文档才能编辑内容")
-    doc.content = body.content
-    doc.status = DocumentStatus.PENDING_REVIEW
-    await doc.save()
-    logger.info("[Document] Content updated and resubmitted: id=%s", body.id)
+    await document_pipeline.resubmit(body.id, body.content)
     return Success(msg="内容已更新，已重新提交审核")
 
 

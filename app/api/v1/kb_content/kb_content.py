@@ -46,7 +46,7 @@ async def create_kb_document(doc_in: DocumentCreate, background_tasks: Backgroun
     obj_dict = doc_in.model_dump()
     obj_dict["uploader_id"] = CTX_USER_ID.get()
     obj = await document_controller.create(obj_dict)
-    background_tasks.add_task(document_pipeline.process_document, obj.id)
+    background_tasks.add_task(document_pipeline.extract, obj.id)
     logger.info("[KBContent] Document created: title=%s, kb_id=%s", doc_in.title, doc_in.knowledge_base_id)
     return Success(msg="文档创建成功，后台处理中", data={"id": obj.id})
 

@@ -363,15 +363,11 @@ class FeishuFolderScanService:
         record.ingest_error = None
         await record.save()
     
-        # 4. 打标记锁：告知补偿任务这个文档由飞书夹扫托管，不要背底尝试
-        #    TTL 3600s 覆盖整个提取周期，_auto_process / process_document 完成后自动释放
+        # 4. 打标记锁：告知补偿任务该文档由飞书夹扫托管
         await self._set_ingest_lock(doc.id)
     
-        # 5. 触发流水线：auto_approve 时跳过审核直接向量化
-        if watch.auto_approve:
-            asyncio.create_task(self._auto_process(doc.id))
-        else:
-            asyncio.create_task(self._process_and_release_lock(doc.id))
+        # 5. 触发流水线
+        asyncio.create_task(self._do_process(watch, doc.id))
     
         logger.info(
             f"[FeishuFolderScan] ingested: watch_id={watch.id}, token={file_token}, "
@@ -395,31 +391,19 @@ class FeishuFolderScanService:
         await redis.delete(lock_key)
         logger.debug(f"[FeishuFolderScan] ingest_lock released: doc_id={doc_id}")
     
-    async def _process_and_release_lock(self, doc_id: int) -> None:
-        """非 auto_approve 路径：提取完成后释放托管锁。"""
-        async with self._process_sem:
-            try:
-                await document_pipeline.process_document(doc_id)
-            finally:
-                # 提取成功或失败均释放锁，让补偿任务可以接管 FAILED 状态的文档
-                await self._release_ingest_lock(doc_id)
+    async def _do_process(self, watch: FeishuFolderWatch, doc_id: int) -> None:
+        """提取文档，按 watch.auto_approve 决定是否自动审核。
 
-    async def _auto_process(self, doc_id: int) -> None:
-        """auto_approve 路径：提取 → 自动跳过审核 → 向量化。"""
+        所有状态转换由 DocumentPipeline 统一编排，本方法只负责提交任务和释放标记锁。
+        """
         async with self._process_sem:
             try:
-                await document_pipeline.process_document(doc_id)
-                # process_document 完成后 doc 状态为 PENDING_REVIEW，直接触发向量化
-                doc = await Document.get(id=doc_id)
-                if doc.status == DocumentStatus.PENDING_REVIEW:
-                    doc.status = DocumentStatus.APPROVED
-                    await doc.save()
-                    await document_pipeline.vectorize_document(doc_id)
-                    logger.info(f"[FeishuFolderScan] auto_approved: doc_id={doc_id}")
+                await document_pipeline.extract(doc_id)
+                if watch.auto_approve:
+                    await document_pipeline.approve(doc_id)
             except Exception:
-                logger.exception(f"[FeishuFolderScan] auto_process failed: doc_id={doc_id}")
+                logger.exception(f"[FeishuFolderScan] process failed: doc_id={doc_id}")
             finally:
-                # 无论成败均释放托管锁
                 await self._release_ingest_lock(doc_id)
 
     async def _re_ingest_updated_files(
@@ -496,10 +480,7 @@ class FeishuFolderScanService:
         await self._set_ingest_lock(doc.id)
 
         # 触发流水线
-        if watch.auto_approve:
-            asyncio.create_task(self._auto_process(doc.id))
-        else:
-            asyncio.create_task(self._process_and_release_lock(doc.id))
+        asyncio.create_task(self._do_process(watch, doc.id))
 
         logger.info(
             f"[FeishuFolderScan] re-ingested: watch_id={watch.id}, token={file_token}, "

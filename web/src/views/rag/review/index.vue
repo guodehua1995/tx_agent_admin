@@ -128,7 +128,7 @@ async function handleApprove() {
       comment: reviewComment.value || undefined,
     }
     const res = await api.approveReview(payload)
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('审核通过')
       drawerVisible.value = false
       $table.value?.handleSearch()
@@ -151,7 +151,7 @@ async function handleReject() {
       action: 'reject',
       comment: reviewComment.value || undefined,
     })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('已拒绝')
       drawerVisible.value = false
       $table.value?.handleSearch()
@@ -174,7 +174,7 @@ async function handleEditFromReview() {
       action: 'reject',
       comment: '审核人转为编辑，自动驳回',
     })
-    if (res.code === 0) {
+    if (res.code === 200) {
       drawerVisible.value = false
       router.push({ path: '/rag-knowledge/document', query: { edit_doc_id: reviewDoc.value.id } })
     } else {

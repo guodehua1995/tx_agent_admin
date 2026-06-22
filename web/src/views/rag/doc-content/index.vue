@@ -85,7 +85,7 @@ async function handleSave() {
         doc_id: docId.value,
         text: modalText.value,
       })
-      if (res.code === 0) {
+      if (res.code === 200) {
         $message?.success('切片更新成功')
         modalVisible.value = false
         await loadChunks()
@@ -98,7 +98,7 @@ async function handleSave() {
         doc_id: docId.value,
         text: modalText.value,
       })
-      if (res.code === 0) {
+      if (res.code === 200) {
         $message?.success('切片创建成功')
         modalVisible.value = false
         await loadChunks()
@@ -116,7 +116,7 @@ async function handleSave() {
 async function handleDelete(row) {
   try {
     const res = await api.deleteDocChunk({ node_id: row.node_id })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('删除成功')
       await loadChunks()
     } else {

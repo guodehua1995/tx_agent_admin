@@ -17,6 +17,7 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from app.controllers.feishu_bot import feishu_bot_controller
 from app.log import logger
 from app.models.rag import FeishuBotConfig
+from app.services.bot_service import bot_service
 from app.services.document_pipeline import document_pipeline
 from app.services.feishu_service import FeishuService
 from app.settings import settings
@@ -162,7 +163,7 @@ class FeishuBotClientManager:
         """异步处理消息：调用 RAG 问答并回复"""
         try:
             # 调用业务逻辑处理消息
-            result = await document_pipeline.handle_bot_message(
+            result = await bot_service.handle_message(
                 bot_id=bot_id,
                 feishu_open_id=sender_open_id,
                 chat_id=chat_id,

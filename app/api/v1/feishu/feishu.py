@@ -9,6 +9,7 @@ from app.controllers.feishu_bot import feishu_bot_controller
 from app.models.rag import Agent
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.feishu import FeishuBotConfigCreate, FeishuBotConfigUpdate
+from app.services.bot_service import bot_service
 from app.services.document_pipeline import document_pipeline
 
 logger = logging.getLogger(__name__)
@@ -185,7 +186,7 @@ async def _process_webhook_message(
     from app.services.feishu_service import feishu_service
 
     try:
-        result = await document_pipeline.handle_bot_message(
+        result = await bot_service.handle_message(
             bot_id=bot_id,
             feishu_open_id=feishu_open_id,
             chat_id=chat_id,

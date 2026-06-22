@@ -1,10 +1,10 @@
 """文档管线单元测试
 
 测试范围:
-- process_document: 调用 run_extraction → 回写 content/source_meta → PENDING_REVIEW
-- process_document: 提取异常时落到 FAILED 状态
-- vectorize_document: 非分页文档优先使用切片产物，否则回退原始内容
-- vectorize_document: 入库失败设置 FAILED
+- extract: 调用 run_extraction → 回写 content/source_meta → PENDING_REVIEW
+- extract: 提取异常时落到 FAILED 状态
+- vectorize: 非分页文档优先使用切片产物，否则回退原始内容
+- vectorize: 入库失败设置 FAILED
 - publish_to_feishu: 成功 / 失败状态流
 - handle_bot_message: 完整消息处理流程
 """
@@ -57,7 +57,7 @@ class TestProcessDocument:
              patch(f"{MODULE}.run_extraction", AsyncMock(return_value=extract_result)) as mock_run:
             MockDoc.get = AsyncMock(return_value=doc)
 
-            await pipeline.process_document(1)
+            await pipeline.extract(1)
 
         mock_run.assert_awaited_once_with(doc)
         assert doc.content == "提取后的全文"
@@ -79,7 +79,7 @@ class TestProcessDocument:
              patch(f"{MODULE}.run_extraction", AsyncMock(side_effect=RuntimeError("解析失败"))):
             MockDoc.get = AsyncMock(return_value=doc)
 
-            await pipeline.process_document(1)
+            await pipeline.extract(1)
 
         assert doc.status == "failed"
         assert "解析失败" in doc.error_message
@@ -119,7 +119,7 @@ class TestVectorizeDocument:
 
             mock_rag.ingest_document = AsyncMock()
 
-            await pipeline.vectorize_document(1)
+            await pipeline.vectorize(1)
 
         call_kwargs = mock_rag.ingest_document.call_args.kwargs
         assert call_kwargs["content"] == "切片后的内容"
@@ -146,7 +146,7 @@ class TestVectorizeDocument:
             MockDTC.is_paged_type = MagicMock(return_value=False)
             mock_rag.ingest_document = AsyncMock()
 
-            await pipeline.vectorize_document(1)
+            await pipeline.vectorize(1)
 
         call_kwargs = mock_rag.ingest_document.call_args.kwargs
         assert call_kwargs["content"] == "原始内容"
@@ -172,7 +172,7 @@ class TestVectorizeDocument:
             MockDTC.is_paged_type = MagicMock(return_value=False)
             mock_rag.ingest_document = AsyncMock(side_effect=Exception("入库失败"))
 
-            await pipeline.vectorize_document(1)
+            await pipeline.vectorize(1)
 
         assert doc.status == "failed"
         assert "入库失败" in doc.error_message
@@ -261,9 +261,9 @@ class TestHandleBotMessage:
     @pytest.mark.asyncio
     async def test_no_knowledge_bases(self):
         """Agent 未关联知识库时返回提示"""
-        from app.services.document_pipeline import DocumentPipeline
+        from app.services.bot_service import BotService
 
-        pipeline = DocumentPipeline()
+        bot_svc = BotService()
 
         mock_bot = MagicMock()
         mock_bot.agent_id = 1
@@ -272,13 +272,13 @@ class TestHandleBotMessage:
         mock_agent.knowledge_bases = MagicMock()
         mock_agent.knowledge_bases.all = AsyncMock(return_value=[])
 
-        with patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl, \
-             patch(f"{MODULE}.Agent") as MockAgent:
+        with patch("app.services.bot_service.feishu_bot_controller") as mock_bot_ctrl, \
+             patch("app.services.bot_service.Agent") as MockAgent:
 
             mock_bot_ctrl.get = AsyncMock(return_value=mock_bot)
             MockAgent.get = AsyncMock(return_value=mock_agent)
 
-            result = await pipeline.handle_bot_message(1, "ou_123", "chat1", "你好")
+            result = await bot_svc.handle_message(1, "ou_123", "chat1", "你好")
 
         assert "未关联任何知识库" in result["answer"]
         assert result["sources"] == []
@@ -286,9 +286,9 @@ class TestHandleBotMessage:
     @pytest.mark.asyncio
     async def test_full_flow_existing_user(self):
         """完整消息处理流: 已有用户 → 获取对话 → RAG 问答 → 保存消息"""
-        from app.services.document_pipeline import DocumentPipeline
+        from app.services.bot_service import BotService
 
-        pipeline = DocumentPipeline()
+        bot_svc = BotService()
 
         mock_bot = MagicMock()
         mock_bot.agent_id = 1
@@ -315,13 +315,13 @@ class TestHandleBotMessage:
 
         rag_result = {"answer": "AI 的回答", "sources": [{"score": 0.9, "text_preview": "src"}]}
 
-        with patch(f"{MODULE}.feishu_bot_controller") as mock_bot_ctrl, \
-             patch(f"{MODULE}.Agent") as MockAgent, \
-             patch(f"{MODULE}.User") as MockUser, \
-             patch(f"{MODULE}.conversation_controller") as mock_conv_ctrl, \
-             patch(f"{MODULE}.LLMProviderConfig") as MockLLMConfig, \
-             patch(f"{MODULE}.rag_service") as mock_rag, \
-             patch(f"{MODULE}.ChatMessage") as MockChatMsg:
+        with patch("app.services.bot_service.feishu_bot_controller") as mock_bot_ctrl, \
+             patch("app.services.bot_service.Agent") as MockAgent, \
+             patch("app.services.bot_service.User") as MockUser, \
+             patch("app.services.bot_service.conversation_controller") as mock_conv_ctrl, \
+             patch("app.services.bot_service.LLMProviderConfig") as MockLLMConfig, \
+             patch("app.services.bot_service.rag_service") as mock_rag, \
+             patch("app.services.bot_service.ChatMessage") as MockChatMsg:
 
             mock_bot_ctrl.get = AsyncMock(return_value=mock_bot)
             MockAgent.get = AsyncMock(return_value=mock_agent)
@@ -332,7 +332,7 @@ class TestHandleBotMessage:
             mock_rag.chat = AsyncMock(return_value=rag_result)
             MockChatMsg.create = AsyncMock()
 
-            result = await pipeline.handle_bot_message(1, "ou_exist", "chat1", "帮我查资料")
+            result = await bot_svc.handle_message(1, "ou_exist", "chat1", "帮我查资料")
 
         assert result["answer"] == "AI 的回答"
         mock_rag.chat.assert_called_once()

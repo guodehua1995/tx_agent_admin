@@ -243,7 +243,7 @@ async function handleSavePageContent() {
       page_number: currentPageDetail.value.page_number,
       content: currentPageContent.value,
     })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success(`第 ${currentPageDetail.value.page_number} 页内容已保存`)
     } else {
       $message?.error(res.msg || '保存失败')
@@ -317,7 +317,7 @@ async function handleSaveContent() {
       id: contentDoc.value.id,
       content: contentText.value,
     })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('内容已更新，已重新提交审核')
       contentDrawerVisible.value = false
       $table.value?.handleSearch()
@@ -381,7 +381,7 @@ function getKbName(id) {
 async function handleRetry(row) {
   try {
     const res = await api.retryDocument({ document_id: row.id })
-    if (res.code === 0) {
+    if (res.code === 200) {
       $message?.success('已重新提交处理')
       $table.value?.handleSearch()
     } else {
