@@ -101,6 +101,7 @@ class FeishuBotClientManager:
                 chat_id = message.chat_id
                 sender_id = sender.sender_id.open_id
                 bot_id = bot.id
+                message_id = message.message_id
 
                 # TODO 通过open_id获取用户信息 如果用户不存在则返回card 提示用户无权限
                 
@@ -110,7 +111,7 @@ class FeishuBotClientManager:
                 # 从同步回调中调度异步处理
                 if self._loop and self._loop.is_running():
                     asyncio.run_coroutine_threadsafe(
-                        self._handle_message_async(bot_id, sender_id, chat_id, text),
+                        self._handle_message_async(bot_id, sender_id, chat_id, text, message_id),
                         self._loop,
                     )
                 else:
@@ -159,10 +160,24 @@ class FeishuBotClientManager:
         self._clients[bot.id] = (thread, cli)
         logger.info(f"[FeishuWS] 已启动: bot={bot.name}(id={bot.id})")
 
-    async def _handle_message_async(self, bot_id: int, sender_open_id: str, chat_id: str, question: str):
-        """异步处理消息：调用 RAG 问答并回复"""
+    async def _handle_message_async(
+        self, bot_id: int, sender_open_id: str, chat_id: str, question: str, message_id: str
+    ):
+        """异步处理消息：加 THINKING 表情 → 调用 RAG 问答 → 回复 → 换成 DONE 表情"""
+        # 提前获取 bot 配置，reaction 和 reply 都需要
+        bot = await feishu_bot_controller.get(id=bot_id)
+
+        # 1. 添加"处理中"表情
+        reaction_id = None
         try:
-            # 调用业务逻辑处理消息
+            reaction_id = await self._feishu_service.add_message_reaction(
+                bot.app_id, bot.app_secret, message_id, "THINKING"
+            )
+        except Exception:
+            pass  # reaction 失败不阻塞主流程
+
+        try:
+            # 2. 调用业务逻辑处理消息
             result = await bot_service.handle_message(
                 bot_id=bot_id,
                 feishu_open_id=sender_open_id,
@@ -173,14 +188,12 @@ class FeishuBotClientManager:
             answer = result.get("answer", "抱歉，暂时无法回答您的问题。")
             sources = result.get("sources", [])
 
-            # 构建回复卡片
-            bot = await feishu_bot_controller.get(id=bot_id)
+            # 3. 构建回复卡片并发送
             image_keys = await self._feishu_service.upload_image_keys_from_sources(
                 bot.app_id, bot.app_secret, sources
             )
             card = await self._feishu_service.build_answer_card(answer, sources, image_keys=image_keys)
 
-            # 发送回复
             await self._feishu_service.send_message(
                 app_id=bot.app_id,
                 app_secret=bot.app_secret,
@@ -189,8 +202,26 @@ class FeishuBotClientManager:
                 msg_type="interactive",
             )
             logger.info(f"[FeishuWS] 已回复: bot_id={bot_id}, chat_id={chat_id}")
+
+            # 4. 处理成功 → 换成 DONE
+            if reaction_id:
+                try:
+                    await self._feishu_service.change_message_reaction(
+                        bot.app_id, bot.app_secret, message_id, reaction_id, "DONE"
+                    )
+                except Exception:
+                    pass
+
         except ValueError as e:
             logger.error(f"[FeishuWS] 处理消息失败: bot_id={bot_id}: {e}")
+            # 错误 → 换成 ERROR 表情
+            if reaction_id:
+                try:
+                    await self._feishu_service.change_message_reaction(
+                        bot.app_id, bot.app_secret, message_id, reaction_id, "ERROR"
+                    )
+                except Exception:
+                    pass
             await self._feishu_service.send_message(
                 app_id=bot.app_id,
                 app_secret=bot.app_secret,
@@ -200,9 +231,16 @@ class FeishuBotClientManager:
             )
         except Exception as e:
             logger.exception(f"[FeishuWS] 处理消息失败: bot_id={bot_id}")
+            # 错误 → 换成 ERROR 表情
+            if reaction_id:
+                try:
+                    await self._feishu_service.change_message_reaction(
+                        bot.app_id, bot.app_secret, message_id, reaction_id, "ERROR"
+                    )
+                except Exception:
+                    pass
             # 尝试发送错误提示
             try:
-                bot = await feishu_bot_controller.get(id=bot_id)
                 await self._feishu_service.send_message(
                     app_id=bot.app_id,
                     app_secret=bot.app_secret,

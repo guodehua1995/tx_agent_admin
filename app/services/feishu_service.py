@@ -60,6 +60,9 @@ class FeishuService:
     async def _post(self, path: str, auth_token: Optional[str] = None, **kwargs) -> dict:
         return await self._request("POST", path, auth_token=auth_token, **kwargs)
 
+    async def _delete(self, path: str, auth_token: Optional[str] = None, **kwargs) -> dict:
+        return await self._request("DELETE", path, auth_token=auth_token, **kwargs)
+
     async def get_tenant_access_token(self, app_id: str, app_secret: str) -> str:
         """获取 tenant_access_token"""
         data = await self._post(
@@ -87,6 +90,44 @@ class FeishuService:
             params={"receive_id_type": "chat_id"},
             json={"receive_id": chat_id, "msg_type": msg_type, "content": content},
         )
+
+    # ── 消息表情回复（Reaction） ──────────────────────────────────────────
+
+    async def add_message_reaction(
+        self, app_id: str, app_secret: str, message_id: str, emoji_type: str
+    ) -> str:
+        """给消息添加表情回复，返回 reaction_id（用于后续删除/变更）"""
+        token = await self.get_tenant_access_token(app_id, app_secret)
+        data = await self._post(
+            f"/im/v1/messages/{message_id}/reactions",
+            auth_token=token,
+            json={"reaction_type": {"emoji_type": emoji_type}},
+        )
+        return data["data"]["reaction_id"]
+
+    async def remove_message_reaction(
+        self, app_id: str, app_secret: str, message_id: str, reaction_id: str
+    ) -> None:
+        """删除消息表情回复"""
+        token = await self.get_tenant_access_token(app_id, app_secret)
+        await self._delete(
+            f"/im/v1/messages/{message_id}/reactions/{reaction_id}",
+            auth_token=token,
+        )
+
+    async def change_message_reaction(
+        self,
+        app_id: str,
+        app_secret: str,
+        message_id: str,
+        old_reaction_id: str,
+        new_emoji_type: str,
+    ) -> str:
+        """变更表情：先删旧的，再加新的，返回新 reaction_id"""
+        await self.remove_message_reaction(app_id, app_secret, message_id, old_reaction_id)
+        return await self.add_message_reaction(app_id, app_secret, message_id, new_emoji_type)
+
+    # ── 消息卡片构建 ──────────────────────────────────────────────────────
 
     async def build_answer_card(self, answer: str, sources: list, image_keys: list[str] | None = None) -> dict:
         """构建消息卡片

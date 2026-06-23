@@ -58,7 +58,12 @@ def _make_kd_query_fn(retriever, kb_name: str, threshold: float, context_chunks_
             expansion = ContextExpansionPostProcessor(context_chunks_window)
             nodes = await expansion.apostprocess_nodes(nodes, query_bundle=query_bundle)
 
-            # 2. 按阈值过滤原始召回节点（扩展节点跳过阈值检查）
+            # 2. 合同条款源文本还原：子 chunk 命中后，返回 SlicingResult 中的完整条款
+            from app.services.rag_node_processors import ContractClauseSourcePostProcessor
+            clause_source = ContractClauseSourcePostProcessor()
+            nodes = await clause_source.apostprocess_nodes(nodes, query_bundle=query_bundle)
+
+            # 3. 按阈值过滤原始召回节点（扩展节点跳过阈值检查）
             filtered = []
             for node in nodes:
                 score = getattr(node, "score", None)

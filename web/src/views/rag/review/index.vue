@@ -127,16 +127,12 @@ async function handleApprove() {
       action: 'approve',
       comment: reviewComment.value || undefined,
     }
-    const res = await api.approveReview(payload)
-    if (res.code === 200) {
-      $message?.success('审核通过')
-      drawerVisible.value = false
-      $table.value?.handleSearch()
-    } else {
-      $message?.error(res.msg || '操作失败')
-    }
-  } catch {
-    $message?.error('操作失败')
+    await api.approveReview(payload)
+    $message?.success('审核通过')
+    drawerVisible.value = false
+    $table.value?.handleSearch()
+  } catch (e) {
+    // 拦截器已展示错误消息，此处不再重复
   } finally {
     reviewLoading.value = false
   }
@@ -146,20 +142,16 @@ async function handleReject() {
   if (!reviewDoc.value) return
   reviewLoading.value = true
   try {
-    const res = await api.rejectReview({
+    await api.rejectReview({
       document_id: reviewDoc.value.id,
       action: 'reject',
       comment: reviewComment.value || undefined,
     })
-    if (res.code === 200) {
-      $message?.success('已拒绝')
-      drawerVisible.value = false
-      $table.value?.handleSearch()
-    } else {
-      $message?.error(res.msg || '操作失败')
-    }
-  } catch {
-    $message?.error('操作失败')
+    $message?.success('已拒绝')
+    drawerVisible.value = false
+    $table.value?.handleSearch()
+  } catch (e) {
+    // 拦截器已展示错误消息，此处不再重复
   } finally {
     reviewLoading.value = false
   }
@@ -169,19 +161,15 @@ async function handleEditFromReview() {
   if (!reviewDoc.value) return
   reviewLoading.value = true
   try {
-    const res = await api.rejectReview({
+    await api.rejectReview({
       document_id: reviewDoc.value.id,
       action: 'reject',
       comment: '审核人转为编辑，自动驳回',
     })
-    if (res.code === 200) {
-      drawerVisible.value = false
-      router.push({ path: '/rag-knowledge/document', query: { edit_doc_id: reviewDoc.value.id } })
-    } else {
-      $message?.error(res.msg || '驳回失败，无法跳转编辑')
-    }
-  } catch {
-    $message?.error('驳回失败，无法跳转编辑')
+    drawerVisible.value = false
+    router.push({ path: '/rag-knowledge/document', query: { edit_doc_id: reviewDoc.value.id } })
+  } catch (e) {
+    // 拦截器已展示错误消息，此处不再重复
   } finally {
     reviewLoading.value = false
   }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import List, Optional
 
 from llama_index.core.schema import NodeWithScore, QueryBundle
@@ -242,3 +243,103 @@ class ContextExpansionPostProcessor:
                 new_nodes.append(NodeWithScore(node=node, score=0.0))
 
         return new_nodes
+
+
+class ContractClauseSourcePostProcessor:
+    """合同条款源文本后处理器。
+
+    向量库中存储的是子 chunk，用于精准召回；本处理器将命中的子 chunk
+    映射回 SlicingResult 中的完整条款原文，保证返回给 LLM 的上下文是完整条款。
+
+    处理逻辑：
+    1. 收集所有命中子 chunk 的 (source_doc_id, clause_index)
+    2. 按 doc_id 查询 SlicingResult，获取原始切片 JSON
+    3. 用完整条款内容替换子 chunk 文本，并去重同条款
+    4. 非合同文档保持原节点不变
+    """
+
+    async def apostprocess_nodes(
+        self,
+        nodes: List[NodeWithScore],
+        query_bundle: Optional[QueryBundle] = None,
+    ) -> List[NodeWithScore]:
+        if not nodes:
+            return nodes
+
+        from llama_index.core.schema import NodeWithScore as _NodeWithScore, TextNode
+        from app.models.rag import SlicingResult
+
+        # 收集合同条款命中项
+        hit_clauses: dict[str, set[int]] = {}
+        for n in nodes:
+            meta = n.node.metadata
+            if meta.get("doc_type_code") == "contract" and "clause_index" in meta:
+                doc_id = str(meta["source_doc_id"])
+                clause_idx = int(meta["clause_index"])
+                hit_clauses.setdefault(doc_id, set()).add(clause_idx)
+
+        if not hit_clauses:
+            return nodes
+
+        # 缓存 SlicingResult 查询结果
+        slicing_cache: dict[str, dict | None] = {}
+        for doc_id in hit_clauses:
+            slicing = await SlicingResult.filter(document_id=int(doc_id)).first()
+            if not slicing or not slicing.sliced_content:
+                slicing_cache[doc_id] = None
+                continue
+            try:
+                slicing_cache[doc_id] = json.loads(slicing.sliced_content)
+            except Exception:
+                logger.exception("[ContractClauseSource] failed to parse slicing result: doc_id=%s", doc_id)
+                slicing_cache[doc_id] = None
+
+        result: List[NodeWithScore] = []
+        seen: set[tuple[str, int]] = set()
+
+        for n in nodes:
+            meta = n.node.metadata
+            # 非合同节点直接保留
+            if meta.get("doc_type_code") != "contract" or "clause_index" not in meta:
+                result.append(n)
+                continue
+
+            doc_id = str(meta["source_doc_id"])
+            clause_idx = int(meta["clause_index"])
+            key = (doc_id, clause_idx)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            data = slicing_cache.get(doc_id)
+            if not data:
+                # 找不到切片结果，退化为返回子 chunk 原文
+                result.append(n)
+                continue
+
+            clause = next(
+                (c for c in data.get("clauses", []) if c.get("clause_index") == clause_idx),
+                None,
+            )
+            if not clause:
+                result.append(n)
+                continue
+
+            # 构建完整条款文本，头部复用 metadata 中的合同元信息
+            clause_title = clause.get("clause_title") or str(clause_idx)
+            header = (
+                f"[合同: {meta.get('title', '')} | "
+                f"甲方: {meta.get('party_a', '')} | "
+                f"乙方: {meta.get('party_b', '')} | "
+                f"类型: {meta.get('contract_type', '')}] | "
+                f"条款 {clause_title}"
+            )
+            full_text = f"{header}\n{clause.get('content', '')}"
+
+            new_node = TextNode(
+                text=full_text,
+                metadata=meta,
+            )
+            result.append(_NodeWithScore(node=new_node, score=n.score))
+
+        return result

@@ -30,6 +30,43 @@ from app.settings import settings
 from app.log import logger
 
 
+def _split_clause_content(text: str, max_chars: int = 500) -> list[str]:
+    """将条款内容按段落切分为多个子chunk，用于大条款的向量化。
+
+    切分规则：
+    - 优先按空行（段落）切分，尽量保持段落完整
+    - 单个段落超过 max_chars 时，再按 max_chars 硬切
+    - 最后一个 chunk 可能小于 max_chars
+    """
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for p in paragraphs:
+        # 单个段落超过上限：先结束当前 chunk，再把该段落按长度硬切
+        if len(p) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            for i in range(0, len(p), max_chars):
+                chunks.append(p[i : i + max_chars])
+            continue
+
+        # 当前 chunk 加上该段落会超限，先结束当前 chunk
+        if current and len(current) + len(p) + 2 > max_chars:
+            chunks.append(current)
+            current = p
+        else:
+            current = current + "\n\n" + p if current else p
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
 class DocumentPipeline:
     """文档处理状态机编排器。
 
@@ -322,32 +359,37 @@ class DocumentPipeline:
         embed_model = build_embed_model(embedding_config)
 
         llama_docs = []
+        chunk_count = 0
         for clause in clauses:
             content = (clause.get("content") or "").strip()
             if not content:
                 continue
-            header = (
-                f"[合同: {doc.title} | "
-                f"甲方: {meta.get('party_a', '')} | "
-                f"乙方: {meta.get('party_b', '')} | "
-                f"类型: {meta.get('contract_type', '')}] | "
-                f"条款 {clause['clause_title']}"
-            )
-            text = f"{header}\n{content}"
-            clause_meta = ContractMetadata(
-                title=doc.title, source_type=doc.source_type,
-                knowledge_base_id=str(kb.id), source_doc_id=str(doc.id),
-                doc_type_code=doc.doc_type_code,
-                party_a=meta.get("party_a", "") or "",
-                party_b=meta.get("party_b", "") or "",
-                contract_type=meta.get("contract_type", "其他"),
-                clause_index=int(clause["clause_index"]),
-                clause_title=clause.get("clause_title"),
-            )
-            llama_docs.append(LlamaDocument(
-                text=text, metadata=clause_meta.to_dict(),
-                doc_id=f"contract_{doc.id}_clause_{clause['clause_index']}",
-            ))
+
+            # 大条款内部子切分：每个子chunk共享同一条款的 clause_index / clause_title
+            sub_chunks = _split_clause_content(content, max_chars=500)
+            for sub_text in sub_chunks:
+                header = (
+                    f"[合同: {doc.title} | "
+                    f"甲方: {meta.get('party_a', '')} | "
+                    f"乙方: {meta.get('party_b', '')} | "
+                    f"类型: {meta.get('contract_type', '')}] | "
+                    f"条款 {clause['clause_title']}"
+                )
+                text = f"{header}\n{sub_text}"
+                clause_meta = ContractMetadata(
+                    title=doc.title, source_type=doc.source_type,
+                    knowledge_base_id=str(kb.id), source_doc_id=str(doc.id),
+                    doc_type_code=doc.doc_type_code,
+                    party_a=meta.get("party_a", "") or "",
+                    party_b=meta.get("party_b", "") or "",
+                    contract_type=meta.get("contract_type", "其他"),
+                    clause_index=int(clause["clause_index"]),
+                    clause_title=clause.get("clause_title"),
+                )
+                llama_docs.append(LlamaDocument(
+                    text=text, metadata=clause_meta.to_dict(),
+                ))
+                chunk_count += 1
 
         if not llama_docs:
             raise ValueError("合同解析后无有效条款")
@@ -357,7 +399,7 @@ class DocumentPipeline:
             vector_store=rag_service._vector_store,
         )
         await pipeline.arun(documents=llama_docs)
-        logger.info(f"Contract vectorized: doc_id={doc.id}, clauses={len(llama_docs)}")
+        logger.info(f"Contract vectorized: doc_id={doc.id}, chunks={chunk_count}, clauses={len(clauses)}")
 
     async def publish_to_feishu(self, slicing_result_id: int):
         from app.controllers.feishu_bot import feishu_bot_controller

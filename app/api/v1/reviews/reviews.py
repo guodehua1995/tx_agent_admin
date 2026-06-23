@@ -4,8 +4,9 @@ from fastapi import APIRouter, BackgroundTasks, Query
 from tortoise.expressions import Q
 
 from app.controllers.document import document_controller
+from app.controllers.review import review_controller
 from app.core.ctx import CTX_USER_ID
-from app.models.enums import DocumentStatus
+from app.models.enums import DocumentStatus, ReviewAction
 from app.models.rag import DocumentPage, SlicingResult
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.reviews import ReviewSubmit
@@ -55,7 +56,6 @@ async def get_review_detail(document_id: int = Query(..., description="文档ID"
 
 @router.get("/history", summary="审核历史")
 async def get_review_history(document_id: int = Query(..., description="文档ID")):
-    from app.controllers.review import review_controller
     reviews = await review_controller.get_by_document(document_id)
     data = [await r.to_dict() for r in reviews]
     return Success(data=data)
@@ -70,10 +70,23 @@ async def approve_document(
     if doc.status != DocumentStatus.PENDING_REVIEW:
         return Fail(msg="该文档不在待审核状态")
 
+    # 同步更新状态和创建审核记录，确保前端刷新可见
+    reviewer_id = CTX_USER_ID.get()
+    if reviewer_id is not None:
+        await review_controller.create({
+            "document_id": review_in.document_id,
+            "reviewer_id": reviewer_id,
+            "action": ReviewAction.APPROVE,
+            "comment": review_in.comment or "",
+        })
+    doc.status = DocumentStatus.APPROVED
+    await doc.save()
+    logger.info(f"Document approved: id={review_in.document_id}, reviewer_id={reviewer_id}")
+
+    # 向量化在后台执行
     background_tasks.add_task(
-        document_pipeline.approve,
+        document_pipeline.vectorize,
         review_in.document_id,
-        reviewer_id=CTX_USER_ID.get(),
     )
 
     return Success(msg="审核通过")
