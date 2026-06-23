@@ -94,6 +94,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "tos>=2.7.0",
     "redis>=5.0.0",
+    "pypinyin>=0.55.0",
 ]
 
 [tool.black]

@@ -79,6 +79,21 @@ class FeishuService:
         )
         return data.get("data", {}).get("content", "")
 
+    async def get_user_info(self, app_id: str, app_secret: str, open_id: str) -> dict | None:
+        """获取飞书用户信息，返回 {"name": str, "email": str | None} 或 None"""
+        token = await self.get_tenant_access_token(app_id, app_secret)
+        data = await self._get(
+            f"/open-apis/contact/v3/users/{open_id}",
+            auth_token=token,
+        )
+        user = (data.get("data", {}) or {}).get("user", {})
+        if not user:
+            return None
+        return {
+            "name": user.get("name", ""),
+            "email": user.get("email"),
+        }
+
     async def send_message(
         self, app_id: str, app_secret: str, chat_id: str, content: str, msg_type: str = "interactive"
     ) -> None:

@@ -7,11 +7,15 @@ import json
 import time
 from datetime import datetime
 
+from pypinyin import lazy_pinyin
+
 from app.controllers.conversation import conversation_controller
 from app.controllers.feishu_bot import feishu_bot_controller
 from app.models.admin import User
-from app.models.rag import Agent, ChatMessage, LLMProviderConfig
+from app.models.rag import Agent, ChatMessage, FeishuBotConfig, LLMProviderConfig
+from app.services.feishu_service import FeishuService
 from app.services.rag_service import rag_service
+from app.utils.password import get_password_hash
 
 from app.log import logger
 
@@ -34,10 +38,12 @@ class BotService:
 
         logger.debug("bot get knowledge bases")
 
-        # 2. feishu_open_id → user
+        # 2. feishu_open_id → user（不存在则自动创建）
         user = await User.filter(feishu_open_id=feishu_open_id).first()
         if not user:
-            return {"answer": "您的账号尚未注册，请联系管理员开通后使用", "sources": []}
+            user = await self._auto_create_user(bot, feishu_open_id)
+            if not user:
+                return {"answer": "自动注册失败，请联系管理员手动添加", "sources": []}
         logger.debug("bot get user")
 
         # 3. 获取/创建 conversation
@@ -102,6 +108,78 @@ class BotService:
         await conv.save()
 
         return result
+
+    async def _auto_create_user(self, bot: FeishuBotConfig, feishu_open_id: str) -> User | None:
+        """自动创建飞书用户。
+
+        username 取值优先级：飞书邮箱前缀 → 真实姓名拼音 → 兜底 feishu_{open_id后8位}
+        """
+        feishu_service = FeishuService()
+
+        # 1. 尝试获取飞书用户信息
+        user_info = None
+        try:
+            user_info = await feishu_service.get_user_info(bot.app_id, bot.app_secret, feishu_open_id)
+        except Exception:
+            logger.warning(f"获取飞书用户信息失败: open_id={feishu_open_id}")
+
+        # 2. 生成 username
+        username = self._generate_username(user_info, feishu_open_id)
+        username = await self._ensure_unique_username(username)
+
+        # 3. 生成 email
+        email = user_info.get("email") if user_info else None
+        if not email:
+            email = f"{username}@feishu.local"
+        email = await self._ensure_unique_email(email)
+
+        # 4. 创建用户
+        alias = user_info.get("name") if user_info else None
+        try:
+            user = await User.create(
+                username=username,
+                alias=alias,
+                email=email,
+                password=get_password_hash("123456"),
+                is_active=True,
+                is_superuser=False,
+                feishu_open_id=feishu_open_id,
+            )
+            logger.info(f"自动创建用户: username={username}, alias={alias}, feishu_open_id={feishu_open_id}")
+            return user
+        except Exception as e:
+            logger.exception(f"自动创建用户失败: open_id={feishu_open_id}: {e}")
+            return None
+
+    @staticmethod
+    def _generate_username(user_info: dict | None, feishu_open_id: str) -> str:
+        """生成 username：邮箱前缀 → 姓名拼音 → 兜底"""
+        if user_info and user_info.get("email"):
+            return user_info["email"].split("@")[0]
+        if user_info and user_info.get("name"):
+            return "".join(lazy_pinyin(user_info["name"]))
+        return f"feishu_{feishu_open_id[-8:]}"
+
+    @staticmethod
+    async def _ensure_unique_username(username: str) -> str:
+        """确保 username 唯一，重名时追加序号"""
+        base = username
+        counter = 1
+        while await User.filter(username=username).exists():
+            username = f"{base}{counter}"
+            counter += 1
+        return username
+
+    @staticmethod
+    async def _ensure_unique_email(email: str) -> str:
+        """确保 email 唯一，重名时追加序号"""
+        base = email
+        counter = 1
+        while await User.filter(email=email).exists():
+            local, _, domain = base.partition("@")
+            email = f"{local}{counter}@{domain}"
+            counter += 1
+        return email
 
 
 bot_service = BotService()
