@@ -382,6 +382,8 @@ pypika-tortoise==0.3.2
     # via
     #   tortoise-orm
     #   vue-fastapi-admin
+pypinyin==0.55.0
+    # via vue-fastapi-admin
 pyproject-toml==0.1.0
     # via vue-fastapi-admin
 pytest==9.0.3
