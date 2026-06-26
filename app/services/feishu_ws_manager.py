@@ -92,6 +92,10 @@ class FeishuBotClientManager:
                 if message.message_type != "text":
                     return
 
+                # 不处理群聊消息
+                if message.chat_type == "group":
+                    return
+
                 # 提取消息内容（JSON 字符串需要解析）
                 content = json.loads(message.content)
                 text = content.get("text", "").strip()
