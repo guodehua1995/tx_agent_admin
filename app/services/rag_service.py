@@ -14,7 +14,7 @@ from app.settings import settings
 from app.agents.tools import KdVectorQueryToolProvider
 
 DEFAULT_CONTEXT_WINDOW = 8192
-MAX_HISTORY_MESSAGES = 10
+MAX_HISTORY_MESSAGES = 100
 
 
 def _build_kb_filters(kb_ids: list[str]) -> MetadataFilters:
@@ -217,6 +217,7 @@ class RAGService:
         llm = build_llm(chat_model_config)
 
         limited_history = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
+        logger.debug(f"[RAG] history count: {len(history)}, limited: {len(limited_history)}, context_window: {getattr(llm.metadata, 'context_window', DEFAULT_CONTEXT_WINDOW)}")
         chat_history = []
         for msg in limited_history:
             role = msg.get("type") or msg.get("role", "user")

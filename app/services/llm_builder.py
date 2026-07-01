@@ -18,6 +18,8 @@ def build_llm(config: LLMProviderConfig):
     from llama_index.llms.openai_like import OpenAILike
 
     extra = config.extra_config or {}
+    # context_window 优先从 extra_config 读取，未配置时兜底到 max_tokens
+    context_window = extra.get("context_window") or config.max_tokens
     return OpenAILike(
         api_base=config.api_base_url,
         api_key=config.api_key,
@@ -25,7 +27,7 @@ def build_llm(config: LLMProviderConfig):
         max_tokens=config.max_tokens,
         temperature=extra.get("temperature", 0.7),
         is_chat_model=True,
-        context_window=8192,
+        context_window=context_window,
         is_function_calling_model=True,
     )
 
