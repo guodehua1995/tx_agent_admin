@@ -58,10 +58,14 @@ class FeishuBotClientManager:
             return
         self._initialized = True
 
-        # bot_id -> (client_thread, client_instance)
-        self._clients: Dict[int, tuple] = {}
+        # bot_id -> Client 实例
+        self._clients: Dict[int, object] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._feishu_service = FeishuService()
+        # 所有飞书机器人共享同一个 WS event loop（lark_oapi.ws.client 使用模块级全局 loop 变量，
+        # 多机器人各自创建 loop 会互相覆盖导致连接异常）
+        self._ws_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._ws_thread: Optional[threading.Thread] = None
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop):
         """设置 asyncio 事件循环，用于从同步回调中调用异步业务逻辑"""
@@ -75,8 +79,35 @@ class FeishuBotClientManager:
         for bot in bots:
             self._start_bot_client(bot)
 
+    def _ensure_ws_loop(self):
+        """确保共享 WS event loop 已创建并运行
+
+        lark_oapi.ws.client 模块使用模块级全局变量 `loop`，多个机器人各自创建 event loop
+        会互相覆盖该全局变量，导致先启动的机器人连接异常。
+        解决方案：所有机器人共享同一个 event loop。
+        """
+        if self._ws_loop is not None and self._ws_loop.is_running():
+            return
+
+        self._ws_loop = asyncio.new_event_loop()
+        import lark_oapi.ws.client as ws_client
+        ws_client.loop = self._ws_loop
+
+        def _run_ws_loop():
+            asyncio.set_event_loop(self._ws_loop)
+            try:
+                logger.info("[FeishuWS] 启动共享 WS event loop")
+                self._ws_loop.run_forever()
+            except Exception as e:
+                logger.exception(f"[FeishuWS] WS event loop 异常: {e}")
+            finally:
+                self._ws_loop.close()
+
+        self._ws_thread = threading.Thread(target=_run_ws_loop, name="feishu-ws-loop", daemon=True)
+        self._ws_thread.start()
+
     def _start_bot_client(self, bot: FeishuBotConfig):
-        """为单个机器人启动 WS 客户端（在线程中运行）"""
+        """为单个机器人启动 WS 客户端（在共享 WS event loop 上运行）"""
         if bot.id in self._clients:
             logger.warning(f"[FeishuWS] 机器人 {bot.name}(id={bot.id}) 已存在连接，跳过")
             return
@@ -145,23 +176,23 @@ class FeishuBotClientManager:
         )
 
     
-        def run_client():
-            new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
+        # 确保共享 WS event loop 已启动（所有机器人共用一个 loop）
+        self._ensure_ws_loop()
+
+        # 在共享 loop 上异步启动连接
+        async def _start_bot_connection():
             try:
                 logger.info(f"[FeishuWS] 启动连接: bot={bot.name}(id={bot.id})")
-                import lark_oapi.ws.client as ws_client
-                ws_client.loop = new_loop
-                cli.start()
+                await cli._connect()
+                self._ws_loop.create_task(cli._ping_loop())
             except Exception as e:
-                logger.exception(f"[FeishuWS] 连接异常: bot={bot.name}")
-            finally:
-                new_loop.close()
+                logger.error(f"[FeishuWS] 连接异常: bot={bot.name}(id={bot.id}): {e}")
+                if cli._auto_reconnect:
+                    self._ws_loop.create_task(cli._reconnect())
 
-        thread = threading.Thread(target=run_client, name=f"feishu-ws-{bot.id}", daemon=True)
-        thread.start()
+        asyncio.run_coroutine_threadsafe(_start_bot_connection(), self._ws_loop)
 
-        self._clients[bot.id] = (thread, cli)
+        self._clients[bot.id] = cli
         logger.info(f"[FeishuWS] 已启动: bot={bot.name}(id={bot.id})")
 
     async def _handle_message_async(
@@ -268,9 +299,11 @@ class FeishuBotClientManager:
         if bot_id not in self._clients:
             return
 
-        thread, cli = self._clients.pop(bot_id)
+        cli = self._clients.pop(bot_id)
         try:
-            # lark.ws.Client 没有显式 stop 方法，依赖线程终止
+            if self._ws_loop and self._ws_loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(cli._disconnect(), self._ws_loop)
+                fut.result(timeout=5)
             logger.info(f"[FeishuWS] 移除连接: bot_id={bot_id}")
         except Exception as e:
             logger.exception(f"[FeishuWS] 移除连接异常: bot_id={bot_id}")
@@ -282,12 +315,18 @@ class FeishuBotClientManager:
             await self.remove_bot(bot_id)
         self._clients.clear()
 
+        # 停止共享 WS event loop
+        if self._ws_loop and self._ws_loop.is_running():
+            self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
+            if self._ws_thread:
+                self._ws_thread.join(timeout=5)
+            self._ws_loop = None
+            self._ws_thread = None
+            logger.info("[FeishuWS] 共享 WS event loop 已停止")
+
     def list_active(self) -> Dict[int, str]:
         """列出当前活跃的连接"""
-        return {
-            bot_id: f"thread_alive={thread.is_alive()}"
-            for bot_id, (thread, _) in self._clients.items()
-        }
+        return {bot_id: "connected" for bot_id in self._clients.keys()}
 
 
 # 全局单例
