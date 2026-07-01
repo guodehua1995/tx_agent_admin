@@ -118,11 +118,11 @@ async def build_chat_tools(
     else:
         tools.extend(await time_provider.build_langchain_tools())
 
-    # 7. 报价规则查询工具（默认始终添加）
-    quotation_provider = QuotationRuleToolProvider()
-    if framework == "llamaindex":
-        tools.extend(await quotation_provider.build_llamaindex_tools())
-    else:
-        tools.extend(await quotation_provider.build_langchain_tools())
+    # # 7. 报价规则查询工具 手动注释 打开前需要询问用户
+    # quotation_provider = QuotationRuleToolProvider()
+    # if framework == "llamaindex":
+    #     tools.extend(await quotation_provider.build_llamaindex_tools())
+    # else:
+    #     tools.extend(await quotation_provider.build_langchain_tools())
 
     return tools
