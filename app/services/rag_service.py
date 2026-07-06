@@ -218,6 +218,7 @@ class RAGService:
 
         limited_history = history[-MAX_HISTORY_MESSAGES:] if len(history) > MAX_HISTORY_MESSAGES else history
         logger.debug(f"[RAG] history count: {len(history)}, limited: {len(limited_history)}, context_window: {getattr(llm.metadata, 'context_window', DEFAULT_CONTEXT_WINDOW)}")
+    
         chat_history = []
         for msg in limited_history:
             role = msg.get("type") or msg.get("role", "user")
@@ -226,16 +227,34 @@ class RAGService:
             content = str(msg["content"])
             chat_history.append(LlamaChatMessage(role=role, content=content))
 
+        # 打印倒数两条
+        logger.debug(f"[RAG] last two messages: {chat_history[-2:]}")
+
         agent_prompt = (
             system_prompt
             or "你是一个智能问答助手。请使用提供的知识库查询工具来检索相关文档，然后基于检索结果回答用户问题。"
             "如果检索结果不足以回答问题，请如实说明。回答应准确、简洁、有条理。"
         )
         context_window = getattr(llm.metadata, "context_window", DEFAULT_CONTEXT_WINDOW)
+        # token_limit 乘以 1.5 的补偿系数：ChatMemoryBuffer 默认使用 cl100k_base 分词器，
+        # 对中文文本每个汉字会计为 2-3 tokens，而实际中文模型（如 Qwen）通常只计 1 token。
+        # 不做补偿会导致 token 预算被虚假耗尽，历史消息被过度截断。
+        token_limit = int(context_window * 0.9 * 1.5)
+        logger.debug(f"[RAG] token_limit: {token_limit} (context_window={context_window}, ratio=0.9*1.5)")
         memory = ChatMemoryBuffer.from_defaults(
-            token_limit=int(context_window * 0.9),
+            token_limit=token_limit,
             chat_history=chat_history,
         )
+
+        # 预览 memory 截断后实际留给 LLM 的内容（不含当前用户提问）
+        retained = memory.get()
+        logger.info(
+            f"[RAG] memory截断: 输入{len(chat_history)}条 -> 保留{len(retained)}条, "
+            f"token预算={token_limit}, 实际token≈{memory._token_count_for_messages(retained)}"
+        )
+        for i, msg in enumerate(retained):
+            preview = str(msg.content)[:80].replace('\n', ' ')
+            logger.debug(f"[RAG]   memory[{i}] role={msg.role} preview={preview}...")
 
         agent = FunctionAgent(
             tools=tools or [],

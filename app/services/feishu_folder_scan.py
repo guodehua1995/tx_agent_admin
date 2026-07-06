@@ -77,8 +77,9 @@ class FeishuFolderScanService:
         )
         for w, r in zip(due_watches, results):
             if isinstance(r, Exception):
-                logger.exception(
-                    f"[FeishuFolderScan] watch scan failed: id={w.id}, name={w.name}"
+                logger.error(
+                    f"[FeishuFolderScan] watch scan failed: id={w.id}, name={w.name}, "
+                    f"error={type(r).__name__}: {r}"
                 )
 
     async def _scan_one_safe(self, watch: FeishuFolderWatch) -> None:

@@ -17,4 +17,5 @@ db.sqlite3-wal
 .env
 .env.docker
 .qoder/
+.pnpm-store/
 nul

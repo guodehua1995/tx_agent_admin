@@ -161,4 +161,31 @@ export default {
   // 归档
   getArchiveList: (params = {}) => request.get('/quotation/archive/list', { params }),
   getArchiveDetail: (params = {}) => request.get('/quotation/archive/detail', { params }),
+  // ── 合同管理 ──────────────────────────────────────────
+  // 合同类型
+  getContractTypeList: () => request.get('/contract/type/list'),
+  createContractType: (data = {}) => request.post('/contract/type/create', data),
+  updateContractType: (data = {}) => request.put('/contract/type/update', data, { params: { id: data.id } }),
+  deleteContractType: (params = {}) => request.delete('/contract/type/delete', { params }),
+  // 合同
+  getContractList: (params = {}) => request.get('/contract/list', { params }),
+  getContractDetail: (params = {}) => request.get('/contract/detail', { params }),
+  updateContract: (data = {}) => request.put('/contract/update', data, { params: { id: data.id } }),
+  deleteContract: (params = {}) => request.delete('/contract/delete', { params }),
+  // 条款编辑
+  updateClause: (data = {}) => request.put('/contract/clause/update', data, { params: { id: data.id } }),
+  createClause: (data = {}) => request.post('/contract/clause/create', data),
+  deleteClause: (params = {}) => request.delete('/contract/clause/delete', { params }),
+  // 合同搜索
+  searchContracts: (params = {}) => request.get('/contract/search', { params }),
+  searchContractSummaries: (params = {}) => request.get('/contract/summary/search', { params }),
+  searchClauses: (params = {}) => request.get('/contract/clause/search', { params }),
+  getClauseContext: (params = {}) => request.get('/contract/clause/context', { params }),
+  // 合同对比
+  compareClauseSummaries: (data = {}) => request.post('/contract/compare/summaries', data),
+  compareClauseFulltext: (data = {}) => request.post('/contract/compare/fulltext', data),
+  findSimilarContracts: (data = {}) => request.post('/contract/similar', data),
+  // 合同统计
+  getContractStats: () => request.get('/contract/stats'),
+  getExpiringContracts: (params = {}) => request.get('/contract/expiring', { params }),
 }

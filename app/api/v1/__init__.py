@@ -20,6 +20,7 @@ from .kb_content import router as kb_content_router
 from .knowledge_bases import knowledge_bases_router
 from .menus import menus_router
 from .quotation import quotation_router
+from .contract import contract_router
 from .reviews import reviews_router
 from .roles import roles_router
 from .users import users_router
@@ -49,6 +50,7 @@ v1_router.include_router(kb_content_router, prefix="/kb_content", dependencies=[
 v1_router.include_router(doc_content_router, prefix="/doc_content", dependencies=[DependPermission])
 v1_router.include_router(doc_pages_router, prefix="/doc_page", dependencies=[DependPermission])
 v1_router.include_router(quotation_router, prefix="/quotation", dependencies=[DependPermission])
+v1_router.include_router(contract_router, prefix="/contract", dependencies=[DependPermission])
 
 # 飞书 Webhook（无认证）
 v1_router.include_router(webhook_router, prefix="/feishu")

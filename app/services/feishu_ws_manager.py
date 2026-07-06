@@ -15,6 +15,7 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
 from app.controllers.feishu_bot import feishu_bot_controller
+from app.controllers.global_config import global_config_controller
 from app.log import logger
 from app.models.rag import FeishuBotConfig
 from app.services.bot_service import bot_service
@@ -72,8 +73,38 @@ class FeishuBotClientManager:
         self._loop = loop
 
     async def start_all(self):
-        """启动所有启用的飞书机器人长连接"""
+        """启动所有启用的飞书机器人长连接
+
+        根据环境 + dev_bot_app_ids 全局配置过滤：
+        - dev 环境：仅启动 dev_bot_app_ids 中列出的 bot
+        - 其他环境：排除 dev_bot_app_ids 中列出的 bot
+        """
         bots = await FeishuBotConfig.filter(is_active=True).all()
+
+        # 读取 dev_bot_app_ids 全局配置
+        dev_bot_app_ids: set[str] = set()
+        try:
+            config = await global_config_controller.get_by_key("dev_bot_app_ids")
+            if config and config.config_value:
+                dev_bot_app_ids = set(json.loads(config.config_value))
+        except Exception:
+            logger.warning("[FeishuWS] 读取 dev_bot_app_ids 配置失败，将不进行过滤")
+
+        if dev_bot_app_ids:
+            is_dev = settings.ENV == "development"
+            if is_dev:
+                # dev 环境：仅保留 dev_bot_app_ids 中的 bot
+                bots = [b for b in bots if b.id in dev_bot_app_ids]
+                logger.info(
+                    f"[FeishuWS] dev 环境，仅启动 dev_bot 列表中的 bot: {dev_bot_app_ids}"
+                )
+            else:
+                # 非 dev 环境：排除 dev_bot_app_ids 中的 bot
+                bots = [b for b in bots if b.id not in dev_bot_app_ids]
+                logger.info(
+                    f"[FeishuWS] 非 dev 环境，排除 dev_bot 列表中的 bot: {dev_bot_app_ids}"
+                )
+
         logger.info(f"[FeishuWS] 发现 {len(bots)} 个启用的飞书机器人")
 
         for bot in bots:

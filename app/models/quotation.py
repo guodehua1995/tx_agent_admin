@@ -5,11 +5,15 @@ from .enums import QuotationRuleStatus, RuleSourceType
 
 
 class Client(BaseModel, TimestampMixin):
-    """甲方 — 报价规则归属主体"""
-    name = fields.CharField(max_length=200, unique=True, description="甲方名称")
-    short_name = fields.CharField(max_length=100, null=True, description="甲方简称", index=True)
+    """甲方/乙方 — 合同签约主体及报价规则归属主体"""
+    name = fields.CharField(max_length=200, unique=True, description="名称")
+    short_name = fields.CharField(max_length=100, null=True, description="简称", index=True)
     contact = fields.CharField(max_length=100, null=True, description="联系人")
     phone = fields.CharField(max_length=50, null=True, description="联系电话")
+    social_credit_code = fields.CharField(max_length=50, null=True, description="统一社会信用代码", index=True)
+    legal_representative = fields.CharField(max_length=100, null=True, description="法定代表人")
+    registered_address = fields.CharField(max_length=500, null=True, description="注册地址")
+    client_type = fields.CharField(max_length=20, null=True, description="主体类型: 企业/政府/个人", index=True)
     remark = fields.TextField(null=True, description="备注")
     is_active = fields.BooleanField(default=True, description="是否启用", index=True)
     is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)

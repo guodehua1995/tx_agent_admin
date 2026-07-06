@@ -18,6 +18,8 @@ from app.models.rag import (
     LLMProviderConfig,
     SlicingResult,
 )
+from app.models.contract import Contract, ContractClause, ContractType
+from app.models.quotation import Client
 from app.schemas.vector_metadata import ContractMetadata, PagedDocumentMetadata
 from app.services.agent_service import agent_service  # noqa: F401
 from app.services.chunk_service import chunk_service
@@ -400,6 +402,106 @@ class DocumentPipeline:
         )
         await pipeline.arun(documents=llama_docs)
         logger.info(f"Contract vectorized: doc_id={doc.id}, chunks={chunk_count}, clauses={len(clauses)}")
+
+        # 保存到 Contract / ContractClause 表
+        await self._save_contract_from_slicing(doc, meta, clauses)
+
+    async def _save_contract_from_slicing(
+        self, doc: Document, meta: dict, clauses: list[dict],
+    ):
+        """从切片结果保存 Contract + ContractClause 记录"""
+        # 检查是否已存在
+        existing = await Contract.filter(document_id=doc.id, is_deleted=False).first()
+        if existing:
+            logger.info(f"Contract already exists for doc_id={doc.id}, skipping save")
+            return
+
+        # 匹配/创建 Client
+        party_a_id = await self._get_or_create_client(meta.get("party_a", ""))
+        party_b_id = await self._get_or_create_client(meta.get("party_b", ""))
+
+        # 匹配/创建 ContractType
+        contract_type_name = meta.get("contract_type", "其他")
+        contract_type = await ContractType.filter(
+            name=contract_type_name, is_deleted=False,
+        ).first()
+        if not contract_type:
+            contract_type = await ContractType.filter(code="other", is_deleted=False).first()
+
+        # 创建 Contract
+        contract = await Contract.create(
+            document_id=doc.id,
+            contract_type_id=contract_type.id if contract_type else None,
+            party_a_client_id=party_a_id or 0,
+            party_b_client_id=party_b_id,
+            project_name=doc.title,
+            summary=doc.summary,
+            clause_count=0,
+        )
+
+        # 创建 ContractClause 树
+        parent_map: dict[str, int] = {}
+        clause_count = 0
+        for clause in clauses:
+            clause_index = clause.get("clause_index", 0)
+            clause_title = clause.get("clause_title") or ""
+            original_text = clause.get("content") or ""
+
+            # 解析层级
+            parts = [p.strip() for p in clause_title.split("-") if p.strip()]
+            level = len(parts) - 1 if parts else 0
+
+            # 确定 parent
+            parent_id = None
+            if level > 0 and len(parts) > 1:
+                parent_path = "-".join(parts[:-1])
+                parent_id = parent_map.get(parent_path)
+
+            # 概要 clause 的 summary
+            summary = None
+            if clause_index == 0:
+                summary = original_text[:500] if original_text else None
+
+            clause_obj = await ContractClause.create(
+                contract=contract,
+                parent_id=parent_id,
+                clause_index=clause_index,
+                clause_title=clause_title if clause_title else None,
+                clause_level=level,
+                original_text=original_text,
+                summary=summary,
+                sort_order=clause_index,
+            )
+
+            full_path = "-".join(parts) if parts else str(clause_index)
+            parent_map[full_path] = clause_obj.id
+            clause_count += 1
+
+        # 更新条款计数
+        contract.clause_count = clause_count
+        await contract.save(update_fields=["clause_count"])
+
+        logger.info(
+            f"Contract saved: doc_id={doc.id}, contract_id={contract.id}, clauses={clause_count}"
+        )
+
+    async def _get_or_create_client(self, name: str) -> int | None:
+        """根据名称匹配或创建 Client"""
+        if not name or not name.strip():
+            return None
+        name = name.strip()
+        client = await Client.filter(name=name, is_deleted=False).first()
+        if client:
+            return client.id
+        client = await Client.filter(short_name=name, is_deleted=False).first()
+        if client:
+            return client.id
+        # 未匹配：创建占位
+        client = await Client.create(
+            name=name, short_name=name, client_type="企业", is_active=True,
+        )
+        logger.info(f"[pipeline] Created placeholder Client: id={client.id}, name={name}")
+        return client.id
 
     async def publish_to_feishu(self, slicing_result_id: int):
         from app.controllers.feishu_bot import feishu_bot_controller

@@ -191,6 +191,8 @@ DATA_SUMMARIZE_PROMPT = """你是合同解析助手。以下条款中包含大�
 
 SUMMARY_PROMPT = """你是合同解析助手。基于以下合同元信息和主要条款，用 200~400 字总结合同的核心约定，
 包括：当事人、合同类型、核心标的、关键义务、主要金额（如有）、争议解决方式。
+
+重要：如果合同内容是双语的（中英对照），只输出中文部分作为摘要，不要输出英文或双语对照内容。
 直接输出概要正文，不要标题和前置说明。"""
 
 
@@ -230,6 +232,10 @@ class ContractSlicingHandler(BaseSlicingHandler):
             # 兜底：LLM 未能识别任何条款，整篇作为单一条款
             self._processing_warnings.append("未识别出任何条款，整篇作为单一条款入库")
             clauses = [{"clause_title": None, "content": raw_content.strip()}]
+
+        # 合并同 title 的连续条款：跨窗口边界导致同一条款被切分为多条时，拼接 content
+        clauses = self._merge_adjacent_same_title(clauses)
+
         logger.debug("[contract] clause splitting completed")
         # 4. 明细数据摘要化：将条款中的大段表格/清单数据替换为简短描述
         clauses = await self._summarize_data_in_clauses(clauses)
@@ -501,6 +507,37 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 )
             clauses.append({"clause_title": m["title"], "content": content})
         return clauses
+
+    @staticmethod
+    def _merge_adjacent_same_title(clauses: list[dict]) -> list[dict]:
+        """合并连续同 title 的条款。
+
+        跨窗口边界时，同一条款可能被 LLM 识别为两条（content 被截断为前后两段），
+        此处将相邻且 title 相同的条款拼接 content，保留第一条。
+        """
+        if not clauses:
+            return clauses
+
+        merged: list[dict] = []
+        for c in clauses:
+            title = (c.get("clause_title") or "").strip()
+            if merged and title and title == ((merged[-1].get("clause_title") or "").strip()):
+                # 同 title 连续出现：拼接 content
+                merged[-1]["content"] = (
+                    (merged[-1]["content"] or "") + "\n\n" + (c["content"] or "")
+                ).strip()
+                logger.debug(
+                    "[contract] merged adjacent same-title clause: title=%s", title,
+                )
+            else:
+                merged.append(c)
+
+        if len(merged) < len(clauses):
+            logger.info(
+                "[contract] merged %d duplicate clauses into %d",
+                len(clauses) - len(merged), len(merged),
+            )
+        return merged
 
     async def _recover_clause(
         self,

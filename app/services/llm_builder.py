@@ -14,20 +14,29 @@ from app.settings import settings
 
 
 def build_llm(config: LLMProviderConfig):
-    """根据数据库配置动态构建 LLM 实例"""
+    """根据数据库配置动态构建 LLM 实例
+
+    参数说明：
+    - max_tokens: 单次回复最大生成 token 数（通常 4096~8192），会发送给 API
+    - context_window: 模型上下文窗口总量（输入+输出），仅用于本地 token 预算计算
+    - 两者均可通过 extra_config 覆盖，DB 字段 max_tokens 为兜底值
+    """
     from llama_index.llms.openai_like import OpenAILike
 
     extra = config.extra_config or {}
-    # context_window 优先从 extra_config 读取，未配置时兜底到 max_tokens
+    # context_window：优先 extra_config，兜底 DB max_tokens
     context_window = extra.get("context_window") or config.max_tokens
+    # max_tokens（生成上限）：优先 extra_config，兜底 DB max_tokens
+    # 注意：当 DB max_tokens 设得很大（如 256000）时，必须通过 extra_config.max_tokens 覆盖
+    max_tokens = extra.get("max_tokens") or config.max_tokens
     return OpenAILike(
         api_base=config.api_base_url,
         api_key=config.api_key,
         model=config.model_name,
-        max_tokens=config.max_tokens,
+        max_tokens=max_tokens,
         temperature=extra.get("temperature", 0.7),
         is_chat_model=True,
-        context_window=context_window,
+        context_window=256000,
         is_function_calling_model=True,
     )
 

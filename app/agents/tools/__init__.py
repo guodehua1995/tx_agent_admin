@@ -19,6 +19,15 @@ from .kd_doc_meta_tool import KdDocMetaToolProvider
 from .kd_vector_query_tool import KdVectorQueryToolProvider
 from .web_reader_tool import WebReaderToolProvider
 from .quotation_rule_tool import QuotationRuleToolProvider
+from .contract_tools import (
+    ContractSearchToolProvider,
+    ContractStatsToolProvider,
+    ContractClauseSearchToolProvider,
+    ContractSummarySearchToolProvider,
+    CompareClauseSummariesToolProvider,
+    CompareClauseFulltextToolProvider,
+    FindSimilarContractsToolProvider,
+)
 
 __all__ = [
     "BaseToolProvider",
@@ -32,6 +41,13 @@ __all__ = [
     "KdVectorQueryToolProvider",
     "WebReaderToolProvider",
     "QuotationRuleToolProvider",
+    "ContractSearchToolProvider",
+    "ContractStatsToolProvider",
+    "ContractClauseSearchToolProvider",
+    "ContractSummarySearchToolProvider",
+    "CompareClauseSummariesToolProvider",
+    "CompareClauseFulltextToolProvider",
+    "FindSimilarContractsToolProvider",
 ]
 
 
@@ -124,5 +140,21 @@ async def build_chat_tools(
     #     tools.extend(await quotation_provider.build_llamaindex_tools())
     # else:
     #     tools.extend(await quotation_provider.build_langchain_tools())
+
+    # 7. 合同管理工具
+    contract_providers = [
+        ContractSearchToolProvider(),
+        ContractStatsToolProvider(),
+        ContractClauseSearchToolProvider(),
+        ContractSummarySearchToolProvider(),
+        CompareClauseSummariesToolProvider(),
+        CompareClauseFulltextToolProvider(),
+        FindSimilarContractsToolProvider(),
+    ]
+    for provider in contract_providers:
+        if framework == "llamaindex":
+            tools.extend(await provider.build_llamaindex_tools())
+        else:
+            tools.extend(await provider.build_langchain_tools())
 
     return tools

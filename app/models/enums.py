@@ -119,3 +119,43 @@ class RuleSourceType(StrEnum):
     """规则来源"""
     MANUAL = "manual"
     EXCEL_IMPORT = "excel_import"
+
+
+# ========== 合同模块枚举 ==========
+
+
+class ContractTypeCode(StrEnum):
+    """合同类型编码 — 种子数据，与 contract_type 表同步"""
+    PURCHASE = "purchase"
+    SERVICE = "service"
+    TECH_COOP = "tech_coop"
+    FRAMEWORK = "framework"
+    LABOR = "labor"
+    LEASE = "lease"
+    OTHER = "other"
+
+    @classmethod
+    def get_display_map(cls) -> dict[str, str]:
+        return {
+            cls.PURCHASE: "采购",
+            cls.SERVICE: "服务",
+            cls.TECH_COOP: "技术合作",
+            cls.FRAMEWORK: "框架协议",
+            cls.LABOR: "劳动",
+            cls.LEASE: "租赁",
+            cls.OTHER: "其他",
+        }
+
+
+class ClientType(StrEnum):
+    """主体类型"""
+    ENTERPRISE = "企业"
+    GOVERNMENT = "政府"
+    INDIVIDUAL = "个人"
+
+
+class SummaryStatus(StrEnum):
+    """合同条款摘要状态"""
+    PENDING_SUMMARY = "pending_summary"    # 待生成摘要
+    SUMMARY_COMPLETE = "summary_complete"  # 摘要已完成
+    PENDING_DELETE = "pending_delete"      # 待删除（已不可见，等后台清理）
