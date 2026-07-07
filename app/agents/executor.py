@@ -43,7 +43,7 @@ class AgentExecutor:
         from .registry import AgentRegistry
 
         agent_class = AgentRegistry.get(agent_name)
-        llm = self.get_llm(agent_name)
+        llm = kwargs.pop("llm", None) or self.get_llm(agent_name)
         agent = agent_class(llm=llm)
 
         return await agent.execute(input_data, **kwargs)

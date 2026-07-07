@@ -281,3 +281,82 @@ async def get_expiring_contracts(days: int = Query(30)):
     contracts = await contract_controller.get_expiring_contracts(days)
     data = [await c.to_dict() for c in contracts]
     return Success(data=data)
+
+
+# ── 合同审查 ──────────────────────────────────────────────────────
+
+
+@router.post("/review/trigger", summary="触发合同审查")
+async def trigger_contract_review(
+    contract_id: int = Query(..., description="合同ID"),
+    focus_areas: str = Query(None, description="分析维度，如'法律合规,商业风险'"),
+):
+    """创建审查记录并加入队列，定时任务会异步执行审查"""
+    from app.models.contract import ContractRiskReport
+
+    # 检查是否已有审查记录
+    existing = await ContractRiskReport.filter(
+        contract_id=contract_id,
+        status__in=["pending", "analyzing"],
+    ).first()
+    if existing:
+        return Fail(msg=f"该合同正在审查中（状态：{existing.status}），请稍后再试")
+
+    # 解析 focus_areas
+    areas = None
+    if focus_areas:
+        areas = [a.strip() for a in focus_areas.split(",") if a.strip()]
+
+    report = await ContractRiskReport.create(
+        contract_id=contract_id,
+        focus_areas=areas,
+        status="pending",
+    )
+
+    logger.info(f"[ContractReview] Triggered: contract_id={contract_id}, report_id={report.id}")
+    return Success(data={
+        "report_id": report.id,
+        "contract_id": contract_id,
+        "status": "pending",
+        "message": "已加入审查队列，完成后会生成飞书文档",
+    })
+
+
+@router.get("/review/result", summary="获取审查结果")
+async def get_review_result(contract_id: int = Query(..., description="合同ID")):
+    """获取合同的最新审查报告"""
+    from app.models.contract import ContractRiskReport
+
+    report = await ContractRiskReport.filter(
+        contract_id=contract_id,
+    ).order_by("-created_at").first()
+
+    if not report:
+        return Fail(msg="该合同暂无审查记录")
+
+    return Success(data={
+        "id": report.id,
+        "contract_id": report.contract_id,
+        "status": report.status,
+        "focus_areas": report.focus_areas,
+        "feishu_doc_url": report.feishu_doc_url,
+        "risk_summary": report.risk_summary,
+        "report_content": report.report_content,
+        "error_message": report.error_message,
+        "analyzed_at": report.analyzed_at.isoformat() if report.analyzed_at else None,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+    })
+
+
+@router.delete("/review/result", summary="删除审查结果")
+async def delete_review_result(report_id: int = Query(..., description="审查报告ID")):
+    """删除指定的审查报告"""
+    from app.models.contract import ContractRiskReport
+
+    report = await ContractRiskReport.filter(id=report_id).first()
+    if not report:
+        return Fail(msg="审查报告不存在")
+
+    await report.delete()
+    logger.info(f"[ContractReview] Deleted: report_id={report_id}")
+    return Success(msg="审查报告已删除")

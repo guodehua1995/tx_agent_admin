@@ -7,10 +7,13 @@ import {
   NFormItem,
   NInput,
   NInputNumber,
+  NModal,
   NPopconfirm,
   NSelect,
+  NSpin,
   NTag,
   NDatePicker,
+  useMessage,
 } from 'naive-ui'
 
 import CommonPage from '@/components/page/CommonPage.vue'
@@ -28,6 +31,7 @@ const router = useRouter()
 const $table = ref(null)
 const queryItems = ref({})
 const vPermission = resolveDirective('permission')
+const message = useMessage()
 
 const contractTypeOptions = ref([])
 const clientOptions = ref([])
@@ -54,6 +58,83 @@ const {
 
 function handleView(row) {
   router.push({ name: '合同详情', query: { contract_id: row.id } })
+}
+
+// ── 审查相关 ──────────────────────────────────────────────────────
+
+const reviewModalVisible = ref(false)
+const reviewLoading = ref(false)
+const reviewResult = ref(null)
+
+async function handleTriggerReview(row) {
+  try {
+    const res = await api.triggerContractReview({ contract_id: row.id })
+    if (res.code === 200) {
+      message.success(res.data?.message || '已加入审查队列')
+    } else {
+      message.warning(res.msg || '触发失败')
+    }
+  } catch (e) {
+    message.error('触发审查失败')
+  }
+}
+
+async function handleViewReview(row) {
+  reviewModalVisible.value = true
+  reviewLoading.value = true
+  reviewResult.value = null
+  try {
+    const res = await api.getReviewResult({ contract_id: row.id })
+    if (res.code === 200) {
+      reviewResult.value = res.data
+    } else {
+      reviewResult.value = { status: 'none', error_message: res.msg }
+    }
+  } catch (e) {
+    reviewResult.value = { status: 'error', error_message: '查询失败' }
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+async function handleDeleteReview() {
+  if (!reviewResult.value?.id) return
+  try {
+    const res = await api.deleteReviewResult({ report_id: reviewResult.value.id })
+    if (res.code === 200) {
+      message.success('审查报告已删除')
+      reviewModalVisible.value = false
+      reviewResult.value = null
+    } else {
+      message.warning(res.msg || '删除失败')
+    }
+  } catch (e) {
+    message.error('删除失败')
+  }
+}
+
+function getReviewStatusText(status) {
+  const map = {
+    pending: '等待审查',
+    analyzing: '审查中',
+    completed: '已完成',
+    failed: '失败',
+    none: '暂无',
+    error: '查询异常',
+  }
+  return map[status] || status
+}
+
+function getReviewStatusType(status) {
+  const map = {
+    pending: 'warning',
+    analyzing: 'info',
+    completed: 'success',
+    failed: 'error',
+    none: 'default',
+    error: 'error',
+  }
+  return map[status] || 'default'
 }
 
 async function loadOptions() {
@@ -215,6 +296,32 @@ const columns = [
           {
             default: () => '详情',
             icon: renderIcon('material-symbols:visibility-outline', { size: 16 }),
+          }
+        ),
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'warning',
+            style: 'margin-right: 8px;',
+            onClick: () => handleTriggerReview(row),
+          },
+          {
+            default: () => '审查',
+            icon: renderIcon('material-symbols:rate-review-outline', { size: 16 }),
+          }
+        ),
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'success',
+            style: 'margin-right: 8px;',
+            onClick: () => handleViewReview(row),
+          },
+          {
+            default: () => '审查结果',
+            icon: renderIcon('material-symbols:description-outline', { size: 16 }),
           }
         ),
         withDirectives(
@@ -422,5 +529,69 @@ const columns = [
         </NFormItem>
       </NForm>
     </CrudModal>
+
+    <!-- 审查结果弹窗 -->
+    <NModal v-model:show="reviewModalVisible" title="审查结果" style="width: 800px; max-height: 80vh;">
+      <NSpin :show="reviewLoading">
+        <div v-if="reviewResult" style="padding: 16px;">
+          <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 12px;">
+            <span>状态：</span>
+            <NTag :type="getReviewStatusType(reviewResult.status)" size="small">
+              {{ getReviewStatusText(reviewResult.status) }}
+            </NTag>
+            <template v-if="reviewResult.status === 'completed'">
+              <span v-if="reviewResult.risk_summary">
+                🔴{{ reviewResult.risk_summary.high || 0 }}
+                🟡{{ reviewResult.risk_summary.medium || 0 }}
+                🟢{{ reviewResult.risk_summary.low || 0 }}
+              </span>
+              <NButton
+                v-if="reviewResult.feishu_doc_url"
+                text
+                type="primary"
+                size="small"
+                @click="window.open(reviewResult.feishu_doc_url, '_blank')"
+              >
+                打开飞书文档
+              </NButton>
+            </template>
+          </div>
+          <div
+            v-if="reviewResult.status === 'completed' && reviewResult.report_content"
+            style="max-height: 50vh; overflow: auto; white-space: pre-wrap; background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 13px; line-height: 1.6;"
+          >
+            {{ reviewResult.report_content }}
+          </div>
+          <div v-else-if="reviewResult.status === 'failed'" style="color: #d03050;">
+            失败原因：{{ reviewResult.error_message || '未知错误' }}
+          </div>
+          <div v-else-if="reviewResult.status === 'pending' || reviewResult.status === 'analyzing'">
+            <p>审查任务正在处理中，请稍后再查看结果。</p>
+          </div>
+          <div v-else-if="reviewResult.status === 'none'">
+            <p>{{ reviewResult.error_message }}</p>
+          </div>
+          <div v-else-if="reviewResult.status === 'error'">
+            <p style="color: #d03050;">{{ reviewResult.error_message }}</p>
+          </div>
+          <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
+            <NPopconfirm @positive-click="handleDeleteReview">
+              <template #trigger>
+                <NButton
+                  v-if="reviewResult.id"
+                  size="small"
+                  type="error"
+                  :disabled="reviewResult.status === 'analyzing'"
+                >
+                  删除报告
+                </NButton>
+              </template>
+              确定删除该审查报告吗？
+            </NPopconfirm>
+            <NButton size="small" @click="reviewModalVisible = false">关闭</NButton>
+          </div>
+        </div>
+      </NSpin>
+    </NModal>
   </CommonPage>
 </template>

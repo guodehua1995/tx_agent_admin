@@ -188,4 +188,8 @@ export default {
   // 合同统计
   getContractStats: () => request.get('/contract/stats'),
   getExpiringContracts: (params = {}) => request.get('/contract/expiring', { params }),
+  // 合同审查
+  triggerContractReview: (params = {}) => request.post('/contract/review/trigger', null, { params }),
+  getReviewResult: (params = {}) => request.get('/contract/review/result', { params }),
+  deleteReviewResult: (params = {}) => request.delete('/contract/review/result', { params }),
 }

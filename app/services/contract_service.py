@@ -646,5 +646,153 @@ class ContractService:
 
         return [dict(r) for r in rows[1]] if rows[1] else []
 
+    # ── 合同审查 ──────────────────────────────────────────────────
+
+    async def get_clause_tree(self, contract_id: int) -> list[dict]:
+        """获取合同一级条款树（含子条款），供审查定时任务使用"""
+        logger.debug(f"[get_clause_tree] contract_id={contract_id}")
+
+        # 获取所有一级条款（clause_level=1）
+        level1_clauses = await ContractClause.filter(
+            contract_id=contract_id,
+            clause_level=1,
+            is_deleted=False,
+        ).order_by("clause_index")
+
+        if not level1_clauses:
+            logger.debug(f"[get_clause_tree] No level-1 clauses found for contract_id={contract_id}")
+            return []
+
+        tree = []
+        for clause in level1_clauses:
+            # 获取子条款
+            children = await ContractClause.filter(
+                contract_id=contract_id,
+                parent_id=clause.id,
+                is_deleted=False,
+            ).order_by("clause_index")
+
+            tree.append({
+                "clause_id": clause.id,
+                "clause_index": clause.clause_index,
+                "clause_title": clause.clause_title,
+                "clause_level": clause.clause_level,
+                "original_text": clause.original_text,
+                "children": [
+                    {
+                        "clause_id": c.id,
+                        "clause_index": c.clause_index,
+                        "clause_title": c.clause_title,
+                        "clause_level": c.clause_level,
+                        "original_text": c.original_text,
+                    }
+                    for c in children
+                ],
+            })
+
+        logger.debug(f"[get_clause_tree] Found {len(tree)} level-1 clauses")
+        return tree
+
+    async def create_temporary_contract(
+        self, content: str, file_name: str = "临时合同",
+    ) -> Contract:
+        """创建临时合同（不上传、不入库、不向量化，仅解析条款用于审查）
+
+        流程：解析合同内容 → 创建 Contract(is_temporary=True) → 创建 ContractClause
+        """
+        logger.debug(f"[create_temporary_contract] file_name={file_name}")
+
+        from app.services.temporary_contract import temporary_contract_processor
+
+        # 解析合同
+        parsed = await temporary_contract_processor.process(content, file_name)
+        meta = parsed.get("meta", {})
+        clauses = parsed.get("clauses", [])
+
+        if not clauses:
+            raise ValueError("合同解析失败：未提取到条款")
+
+        logger.debug(
+            f"[create_temporary_contract] Parsed {len(clauses)} clauses, "
+            f"meta={meta}"
+        )
+
+        # 匹配/创建 ContractType
+        contract_type_name = meta.get("contract_type", "其他")
+        contract_type = await ContractType.filter(
+            name=contract_type_name, is_deleted=False,
+        ).first()
+        if not contract_type:
+            contract_type = await ContractType.filter(
+                code="other", is_deleted=False,
+            ).first()
+
+        # 创建临时合同
+        contract = await Contract.create(
+            document_id=None,
+            contract_type_id=contract_type.id if contract_type else None,
+            party_a_client_id=0,
+            party_b_client_id=None,
+            project_name=file_name,
+            clause_count=0,
+            is_temporary=True,
+        )
+
+        # 创建条款树
+        parent_map: dict[str, int] = {}
+        clause_count = 0
+        for clause in clauses:
+            clause_index = clause.get("clause_index", 0)
+            clause_title = clause.get("clause_title") or ""
+            original_text = clause.get("content") or ""
+
+            parts = [p.strip() for p in clause_title.split("-") if p.strip()]
+            level = len(parts) - 1 if parts else 0
+
+            parent_id = None
+            if level > 0 and len(parts) > 1:
+                parent_path = "-".join(parts[:-1])
+                parent_id = parent_map.get(parent_path)
+
+            await ContractClause.create(
+                contract=contract,
+                parent_id=parent_id,
+                clause_index=clause_index,
+                clause_title=clause_title if clause_title else None,
+                clause_level=level,
+                original_text=original_text,
+                sort_order=clause_index,
+            )
+
+            full_path = "-".join(parts) if parts else str(clause_index)
+            parent_map[full_path] = clause_count
+            clause_count += 1
+
+        contract.clause_count = clause_count
+        await contract.save(update_fields=["clause_count"])
+
+        logger.debug(
+            f"[create_temporary_contract] Created: contract_id={contract.id}, "
+            f"clauses={clause_count}"
+        )
+        return contract
+
+    async def get_feishu_review_folder(self) -> str | None:
+        """从 GlobalConfig 读取审查报告飞书文档存放目录"""
+        from app.models.global_config import GlobalConfig
+
+        config = await GlobalConfig.filter(
+            config_key="contract_review_feishu_folder",
+        ).first()
+
+        if config:
+            logger.debug(
+                f"[get_feishu_review_folder] folder_token={config.config_value}"
+            )
+            return config.config_value
+
+        logger.debug("[get_feishu_review_folder] No config found")
+        return None
+
 
 contract_service = ContractService()

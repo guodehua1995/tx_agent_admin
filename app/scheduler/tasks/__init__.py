@@ -10,6 +10,8 @@ from .doc_compensate import (
 from .feishu_folder_scan import scan_feishu_folders
 from .contract_expiry import check_contract_expiry
 from .clause_summary import process_clause_summaries
+from .contract_review import review_contracts
+from .contract_cleanup import cleanup_temporary_contracts
 
 # 所有补偿任务列表（按执行顺序）
 _ALL_TASKS: list[Callable[[], Awaitable[None]]] = [
@@ -19,6 +21,8 @@ _ALL_TASKS: list[Callable[[], Awaitable[None]]] = [
     scan_feishu_folders,         # 扫描飞书云盘文件夹（新增文件自动入库）
     check_contract_expiry,       # 合同到期提醒
     process_clause_summaries,    # 合同条款摘要异步处理
+    review_contracts,            # 合同风险审查
+    cleanup_temporary_contracts,  # 临时合同清理
 ]
 
 

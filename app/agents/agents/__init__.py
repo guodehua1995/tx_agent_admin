@@ -4,7 +4,9 @@
 
 # 导入所有 Agent 以触发注册
 from .doc_to_markdown import DocToMarkdownAgent
+from .contract_review import ContractClauseReviewAgent
 
 __all__ = [
     "DocToMarkdownAgent",
+    "ContractClauseReviewAgent",
 ]

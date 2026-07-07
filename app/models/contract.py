@@ -24,9 +24,12 @@ class ContractType(BaseModel, TimestampMixin):
 
 
 class Contract(BaseModel, TimestampMixin):
-    """合同主表 — 关联 Document 表 (1:1)"""
+    """合同主表 — 关联 Document 表 (1:1)
 
-    document_id = fields.IntField(unique=True, description="关联 Document.id")
+    document_id 为 null 时表示临时上传合同（无 Document 记录）。
+    """
+
+    document_id = fields.IntField(null=True, unique=True, description="关联 Document.id（临时合同为 null）")
     contract_type = fields.ForeignKeyField(
         "models.ContractType", null=True, description="合同类型ID -> contract_type.id", index=True,
     )
@@ -40,10 +43,35 @@ class Contract(BaseModel, TimestampMixin):
     clause_count = fields.IntField(default=0, description="条款数量")
     summary = fields.TextField(null=True, description="合同摘要")
     document_url = fields.CharField(max_length=1000, null=True, description="合同文档链接（来自 Document.source_meta）")
+    is_temporary = fields.BooleanField(default=False, index=True, description="是否为临时上传合同")
     is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
 
     class Meta:
         table = "contract"
+
+
+class ContractRiskReport(BaseModel, TimestampMixin):
+    """合同风险审查报告表 — 独立存储，CASCADE 删除"""
+
+    contract = fields.ForeignKeyField(
+        "models.Contract", on_delete=fields.CASCADE,
+        description="所属合同", index=True,
+    )
+    focus_areas = fields.JSONField(null=True, description="分析维度")
+    status = fields.CharField(
+        max_length=20, default="pending", index=True,
+        description="审查状态: pending/analyzing/completed/failed",
+    )
+    report_content = fields.TextField(null=True, description="Markdown 审查报告")
+    feishu_doc_url = fields.CharField(max_length=1000, null=True, description="飞书文档链接")
+    risk_summary = fields.JSONField(null=True, description="风险汇总: {high:N, medium:N, low:N}")
+    error_message = fields.TextField(null=True, description="失败原因")
+    analyzed_at = fields.DatetimeField(null=True, description="分析完成时间")
+    chat_id = fields.CharField(max_length=200, null=True, description="触发审查的飞书群聊ID")
+    bot_id = fields.IntField(null=True, description="触发审查的飞书Bot ID")
+
+    class Meta:
+        table = "contract_risk_report"
 
 
 class ContractClause(BaseModel, TimestampMixin):

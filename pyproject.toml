@@ -95,6 +95,7 @@ dependencies = [
     "tos>=2.7.0",
     "redis>=5.0.0",
     "pypinyin>=0.55.0",
+    "deepagents>=0.5.3",
 ]
 
 [tool.black]

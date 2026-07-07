@@ -12,13 +12,19 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 from typing import Optional
 
 from pydantic import BaseModel, Field
+from tortoise.expressions import Q
 
 from app.log import logger
 from app.services.contract_service import contract_service
+from app.models.contract import ContractClause, ContractRiskReport
+
+# 飞书上下文变量（由 feishu_ws_manager / feishu.py 在消息处理入口设置）
+chat_context: contextvars.ContextVar = contextvars.ContextVar("chat_context", default=None)
 
 from .base import BaseToolProvider, adapt_to_langchain, adapt_to_llamaindex
 
@@ -67,6 +73,16 @@ class ClauseFulltextCompareArgs(BaseModel):
 class SimilarContractArgs(BaseModel):
     contract_id: int = Field(..., description="参考合同ID")
     limit: int = Field(5, description="返回数量")
+
+
+class ContractClauseQueryArgs(BaseModel):
+    contract_id: int = Field(..., description="合同ID")
+    keyword: str = Field(..., description="条款关键词（模糊搜索条款标题和原文）")
+
+
+class ContractReviewTriggerArgs(BaseModel):
+    contract_id: int = Field(..., description="合同ID")
+    focus_areas: Optional[str] = Field(None, description="分析维度，如'法律合规,商业风险'")
 
 
 # ── 核心查询逻辑 ─────────────────────────────────────────────────
@@ -277,6 +293,124 @@ async def _find_similar_contracts(
         return json.dumps({"error": f"查询异常: {str(e)}"}, ensure_ascii=False)
 
 
+async def _query_contract_clause(
+    contract_id: int,
+    keyword: str,
+) -> str:
+    """在指定合同内模糊搜索条款，返回匹配条款及其子条款原文"""
+    try:
+        logger.debug(f"[_query_contract_clause] contract_id={contract_id}, keyword={keyword}")
+
+        # 模糊搜索：标题或原文包含关键词
+        clauses = await ContractClause.filter(
+            contract_id=contract_id,
+            is_deleted=False,
+        ).filter(
+            Q(clause_title__icontains=keyword) | Q(original_text__icontains=keyword),
+        ).order_by("clause_index").limit(10)
+
+        if not clauses:
+            logger.debug(f"[_query_contract_clause] No clauses found for keyword={keyword}")
+            return json.dumps({"message": f"未找到包含'{keyword}'的条款"}, ensure_ascii=False)
+
+        results = []
+        for clause in clauses:
+            # 获取子条款
+            children = await ContractClause.filter(
+                contract_id=contract_id,
+                parent_id=clause.id,
+                is_deleted=False,
+            ).order_by("clause_index")
+
+            child_texts = [
+                f"{c.clause_title or ''}: {c.original_text[:300]}"
+                for c in children
+            ]
+
+            results.append({
+                "clause_index": clause.clause_index,
+                "clause_title": clause.clause_title,
+                "clause_level": clause.clause_level,
+                "original_text": clause.original_text[:500],
+                "children": child_texts if child_texts else None,
+            })
+
+        logger.debug(f"[_query_contract_clause] Found {len(results)} matching clauses")
+        return json.dumps({"count": len(results), "clauses": results}, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"[_query_contract_clause] Error: {e}", exc_info=True)
+        return json.dumps({"error": f"查询异常: {str(e)}"}, ensure_ascii=False)
+
+
+# [保留] 审核 Agent 专用：创建审查记录并触发异步审查
+# 已从合同 Agent 工具列表中移除（审核触发已拆分到独立审核 Agent）。
+# 后续如需在对话中重新挂载审核触发能力，可加回 build_chat_tools() 的 contract_providers。
+async def _trigger_contract_review(
+    contract_id: int,
+    focus_areas: Optional[str] = None,
+) -> str:
+    """创建合同审查记录，触发异步审查"""
+    try:
+        logger.debug(f"[_trigger_contract_review] contract_id={contract_id}, focus_areas={focus_areas}")
+
+        # 检查是否已有审查记录
+        existing = await ContractRiskReport.filter(
+            contract_id=contract_id,
+            status__in=["pending", "analyzing"],
+        ).first()
+        if existing:
+            logger.debug(f"[_trigger_contract_review] Already reviewing: status={existing.status}")
+            return json.dumps({
+                "message": "该合同正在审查中，请稍后再试",
+                "status": existing.status,
+            }, ensure_ascii=False)
+
+        # 检查是否有已完成报告
+        completed = await ContractRiskReport.filter(
+            contract_id=contract_id,
+            status="completed",
+        ).order_by("-created_at").first()
+        if completed and completed.feishu_doc_url:
+            logger.debug(f"[_trigger_contract_review] Already completed: report_id={completed.id}")
+            return json.dumps({
+                "message": "该合同已有审查报告",
+                "report_id": completed.id,
+                "feishu_doc_url": completed.feishu_doc_url,
+                "analyzed_at": completed.analyzed_at.isoformat() if completed.analyzed_at else None,
+            }, ensure_ascii=False)
+
+        # 从上下文中获取 chat_id 和 bot_id
+        ctx = chat_context.get(None)
+        chat_id = ctx.get("chat_id") if ctx else None
+        bot_id = ctx.get("bot_id") if ctx else None
+
+        logger.debug(f"[_trigger_contract_review] chat_id={chat_id}, bot_id={bot_id}")
+
+        # 解析 focus_areas
+        areas = None
+        if focus_areas:
+            areas = [a.strip() for a in focus_areas.split(",") if a.strip()]
+
+        # 创建审查记录
+        report = await ContractRiskReport.create(
+            contract_id=contract_id,
+            focus_areas=areas,
+            status="pending",
+            chat_id=chat_id,
+            bot_id=bot_id,
+        )
+
+        logger.debug(f"[_trigger_contract_review] Created review record: report_id={report.id}")
+        return json.dumps({
+            "message": "已加入审查队列，完成后会通知您",
+            "report_id": report.id,
+            "contract_id": contract_id,
+        }, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"[_trigger_contract_review] Error: {e}", exc_info=True)
+        return json.dumps({"error": f"创建审查任务失败: {str(e)}"}, ensure_ascii=False)
+
+
 # ── 工具提供者 ────────────────────────────────────────────────────
 
 
@@ -385,4 +519,47 @@ class FindSimilarContractsToolProvider(BaseToolProvider):
     async def build_langchain_tools(self, **kwargs) -> list:
         return [adapt_to_langchain(
             _find_similar_contracts, self.TOOL_NAME, self.TOOL_DESC, args_schema=SimilarContractArgs,
+        )]
+
+
+class ContractClauseQueryToolProvider(BaseToolProvider):
+    """审查 Agent 专用：在指定合同内模糊搜索条款"""
+    TOOL_NAME = "query_contract_clause"
+    TOOL_DESC = (
+        "在指定合同内模糊搜索条款。输入合同ID和关键词，"
+        "返回匹配条款（含标题和原文）及其子条款原文。"
+        "当审查某条款时，如果发现该条款引用了其他条款（如'按第七条执行'），"
+        "必须调用此工具查询被引用条款的原文，确保交叉验证后再给出审查意见。"
+        "查询不到时返回空列表，此时应在报告中标注引用缺失。"
+    )
+
+    async def build_llamaindex_tools(self, **kwargs) -> list:
+        return [adapt_to_llamaindex(_query_contract_clause, self.TOOL_NAME, self.TOOL_DESC)]
+
+    async def build_langchain_tools(self, **kwargs) -> list:
+        return [adapt_to_langchain(
+            _query_contract_clause, self.TOOL_NAME, self.TOOL_DESC,
+            args_schema=ContractClauseQueryArgs,
+        )]
+
+
+# [保留] 审核 Agent 专用工具提供者
+# 已从合同 Agent 工具列表中移除（审核触发已拆分到独立审核 Agent）。
+# 后续如需重新挂载，可加回 build_chat_tools() 的 contract_providers。
+class ContractReviewTriggerToolProvider(BaseToolProvider):
+    """聊天触发合同审查"""
+    TOOL_NAME = "trigger_contract_review"
+    TOOL_DESC = (
+        "触发合同风险审查。输入合同ID和可选的分析维度（如'法律合规,商业风险'），"
+        "创建审查任务并加入队列，完成后会通过飞书通知用户。"
+        "当用户要求'审查合同'、'分析合同风险'、'检查合同漏洞'时使用此工具。"
+    )
+
+    async def build_llamaindex_tools(self, **kwargs) -> list:
+        return [adapt_to_llamaindex(_trigger_contract_review, self.TOOL_NAME, self.TOOL_DESC)]
+
+    async def build_langchain_tools(self, **kwargs) -> list:
+        return [adapt_to_langchain(
+            _trigger_contract_review, self.TOOL_NAME, self.TOOL_DESC,
+            args_schema=ContractReviewTriggerArgs,
         )]

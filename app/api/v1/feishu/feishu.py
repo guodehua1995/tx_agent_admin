@@ -184,6 +184,10 @@ async def _process_webhook_message(
 ):
     """后台处理 webhook 消息: RAG 问答 + 飞书回复"""
     from app.services.feishu_service import feishu_service
+    from app.agents.tools.contract_tools import chat_context
+
+    # 设置飞书上下文（供 Agent 工具使用）
+    chat_context.set({"chat_id": chat_id, "bot_id": bot_id})
 
     try:
         result = await bot_service.handle_message(

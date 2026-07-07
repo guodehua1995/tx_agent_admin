@@ -27,6 +27,8 @@ from .contract_tools import (
     CompareClauseSummariesToolProvider,
     CompareClauseFulltextToolProvider,
     FindSimilarContractsToolProvider,
+    ContractClauseQueryToolProvider,
+    ContractReviewTriggerToolProvider,
 )
 
 __all__ = [
@@ -48,6 +50,8 @@ __all__ = [
     "CompareClauseSummariesToolProvider",
     "CompareClauseFulltextToolProvider",
     "FindSimilarContractsToolProvider",
+    "ContractClauseQueryToolProvider",
+    "ContractReviewTriggerToolProvider",
 ]
 
 
@@ -141,7 +145,8 @@ async def build_chat_tools(
     # else:
     #     tools.extend(await quotation_provider.build_langchain_tools())
 
-    # 7. 合同管理工具
+    # 7. 合同管理工具（合同 Agent 专用：搜索与答疑，不含审核触发）
+    # ContractReviewTriggerToolProvider 已移除——审核触发已拆分到独立的审核 Agent
     contract_providers = [
         ContractSearchToolProvider(),
         ContractStatsToolProvider(),

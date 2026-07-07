@@ -230,6 +230,10 @@ class FeishuBotClientManager:
         self, bot_id: int, sender_open_id: str, chat_id: str, question: str, message_id: str
     ):
         """异步处理消息：加 THINKING 表情 → 调用 RAG 问答 → 回复 → 换成 DONE 表情"""
+        # 设置飞书上下文（供 Agent 工具使用）
+        from app.agents.tools.contract_tools import chat_context
+        chat_context.set({"chat_id": chat_id, "bot_id": bot_id})
+
         # 提前获取 bot 配置，reaction 和 reply 都需要
         bot = await feishu_bot_controller.get(id=bot_id)
 
