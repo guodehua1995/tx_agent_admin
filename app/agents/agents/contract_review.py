@@ -5,16 +5,12 @@
 由定时任务 per-clause 并行调用。
 """
 
-from typing import Any
-
 from deepagents import create_deep_agent
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import StructuredTool
 
 from app.log import logger
 from app.agents.tools.contract_tools import (
     ContractClauseQueryToolProvider,
-    _query_contract_clause,
 )
 
 from ..base import BaseAgent
@@ -54,12 +50,6 @@ class ContractClauseReviewAgent(BaseAgent):
     name = "contract_clause_review"
     description = "审查单个合同条款，支持跨条款引用对比"
     version = "1.0.0"
-
-    def _build_prompt(self) -> ChatPromptTemplate:
-        """Deep Agent 使用 system_prompt 字符串，此方法仅满足基类抽象要求"""
-        return ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-        ])
 
     async def _build_clause_query_tool(self) -> StructuredTool:
         """构建条款查询工具"""

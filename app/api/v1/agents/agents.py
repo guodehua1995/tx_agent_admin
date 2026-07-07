@@ -8,16 +8,86 @@ from fastapi.responses import StreamingResponse
 from tortoise.expressions import Q
 
 from app.controllers.agent import agent_controller
+from app.controllers.ai_config import ai_config_controller
 from app.controllers.conversation import conversation_controller
 from app.core.ctx import CTX_USER_ID
-from app.models.rag import ChatMessage, LLMProviderConfig
-from app.schemas.agents import AgentCreate, AgentUpdate, UpdateKnowledgeBases
+from app.models.rag import ChatMessage
+from app.schemas.agents import AgentCreate, AgentUpdate
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.chat import ChatRequest
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 历史对话最大轮数（每个 Agent 文件可自行覆盖，此处为默认值）
+DEFAULT_MAX_HISTORY_TURNS = 10
+
+
+async def _get_chat_model():
+    """获取活跃的 Chat 模型（LangChain ChatOpenAI 实例）"""
+    from langchain_openai import ChatOpenAI
+
+    models = await ai_config_controller.get_active_chat_models()
+    if not models:
+        raise RuntimeError("无可用 Chat 模型")
+    cfg = models[0]
+    extra = cfg.extra_config or {}
+    return ChatOpenAI(
+        model=cfg.model_name,
+        api_key=cfg.api_key,
+        base_url=cfg.api_base_url,
+        temperature=extra.get("temperature", 0.7),
+        max_tokens=extra.get("max_tokens") or cfg.max_tokens,
+    )
+
+
+async def _route_agent(agent_code: str, llm):
+    """按 code 路由到对应的 Agent 实例"""
+    from app.agents.registry import AgentRegistry
+
+    agent_cls = AgentRegistry.get(agent_code)
+    return agent_cls(llm=llm)
+
+
+async def _save_chat_messages(
+    conv, question: str, result: dict, elapsed_ms: int,
+):
+    """保存对话消息到数据库"""
+    await ChatMessage.create(
+        conversation_id=conv.id, type="user", content=question,
+    )
+    for tc in result.get("tool_calls", []):
+        await ChatMessage.create(
+            conversation_id=conv.id,
+            type="tool_call",
+            content=json.dumps(
+                {"tool_name": tc["tool_name"], "tool_input": tc["tool_input"]},
+                ensure_ascii=False,
+            ),
+        )
+        await ChatMessage.create(
+            conversation_id=conv.id,
+            type="tool_call_result",
+            content=json.dumps(
+                {"tool_name": tc["tool_name"], "result": tc["tool_output"]},
+                ensure_ascii=False,
+            ),
+        )
+    await ChatMessage.create(
+        conversation_id=conv.id,
+        type="assistant",
+        content=result["answer"],
+        retrieved_chunks=result.get("sources", []),
+        response_time_ms=elapsed_ms,
+    )
+    tool_msg_count = len(result.get("tool_calls", [])) * 2
+    conv.message_count += 2 + tool_msg_count
+    conv.last_active_at = datetime.now()
+    await conv.save()
+
+
+# ── CRUD ──────────────────────────────────────────────────────────
 
 
 @router.get("/list", summary="Agent列表")
@@ -29,39 +99,33 @@ async def list_agent(
     q = Q()
     if name:
         q &= Q(name__contains=name)
-    total, objs = await agent_controller.list(page=page, page_size=page_size, search=q, order=["-created_at"])
-    data = [await obj.to_dict(m2m=True) for obj in objs]
+    total, objs = await agent_controller.list(
+        page=page, page_size=page_size, search=q, order=["-created_at"],
+    )
+    # 不再有 M2M 字段，m2m=False
+    data = [await obj.to_dict(m2m=False) for obj in objs]
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
 
 
 @router.get("/get", summary="Agent详情")
 async def get_agent(agent_id: int = Query(..., description="Agent ID")):
     obj = await agent_controller.get(id=agent_id)
-    return Success(data=await obj.to_dict(m2m=True))
+    return Success(data=await obj.to_dict(m2m=False))
 
 
 @router.post("/create", summary="创建Agent")
 async def create_agent(agent_in: AgentCreate):
-    if not await LLMProviderConfig.exists(id=agent_in.chat_model_id):
-        return Fail(msg="对话模型配置不存在")
     obj = await agent_controller.create(agent_in)
-    if agent_in.knowledge_base_ids:
-        await agent_controller.update_knowledge_bases(obj, agent_in.knowledge_base_ids)
-    if agent_in.doc_template_ids:
-        await agent_controller.update_doc_templates(obj, agent_in.doc_template_ids)
-    logger.info("[Agent] Created: name=%s, id=%s", agent_in.name, obj.id)
+    logger.info("[Agent] Created: name=%s, code=%s, id=%s", agent_in.name, agent_in.code, obj.id)
     return Success(msg="创建成功")
 
 
 @router.post("/update", summary="更新Agent")
 async def update_agent(agent_in: AgentUpdate):
-    if agent_in.chat_model_id is not None and not await LLMProviderConfig.exists(id=agent_in.chat_model_id):
-        return Fail(msg="对话模型配置不存在")
-    obj = await agent_controller.update(id=agent_in.id, obj_in=agent_in.model_dump(exclude_unset=True, exclude={"id", "knowledge_base_ids", "doc_template_ids"}))
-    if agent_in.knowledge_base_ids is not None:
-        await agent_controller.update_knowledge_bases(obj, agent_in.knowledge_base_ids)
-    if agent_in.doc_template_ids is not None:
-        await agent_controller.update_doc_templates(obj, agent_in.doc_template_ids)
+    await agent_controller.update(
+        id=agent_in.id,
+        obj_in=agent_in.model_dump(exclude_unset=True, exclude={"id"}),
+    )
     logger.info("[Agent] Updated: id=%s", agent_in.id)
     return Success(msg="更新成功")
 
@@ -73,113 +137,76 @@ async def delete_agent(agent_id: int = Query(..., description="Agent ID")):
     return Success(msg="删除成功")
 
 
-@router.post("/update_knowledge_bases", summary="更新Agent关联知识库")
-async def update_agent_knowledge_bases(update_in: UpdateKnowledgeBases):
-    agent = await agent_controller.get(id=update_in.agent_id)
-    await agent_controller.update_knowledge_bases(agent, update_in.knowledge_base_ids)
-    logger.info("[Agent] KBs updated: agent_id=%s, kb_ids=%s", update_in.agent_id, update_in.knowledge_base_ids)
-    return Success(msg="更新成功")
+# ── 对话 ──────────────────────────────────────────────────────────
 
 
 @router.post("/chat", summary="与Agent对话（非流式）")
 async def chat_with_agent(chat_in: ChatRequest):
-    from app.services.rag_service import rag_service
-
     user_id = CTX_USER_ID.get()
 
     agent = await agent_controller.get(id=chat_in.agent_id)
     if not agent.is_active:
         return Fail(msg="该Agent已停用")
+    if not agent.code:
+        return Fail(msg="该Agent未配置路由标识(code)，无法执行")
 
-    knowledge_bases = await agent.knowledge_bases.all()
-    if not knowledge_bases:
-        return Fail(msg="该Agent未关联任何知识库")
+    try:
+        llm = await _get_chat_model()
+        agent_instance = await _route_agent(agent.code, llm)
+    except RuntimeError as e:
+        return Fail(msg=str(e))
+    except KeyError:
+        return Fail(msg=f"Agent '{agent.code}' 未注册，请检查 agents/ 目录")
 
-    # 加载绑定的文档模板
-    doc_templates = await agent.doc_templates.filter(is_deleted=False).all()
-
-    conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
-
-    history = await conversation_controller.get_messages(
-        conv.id, limit=agent.max_history_turns * 2, agent_friendly=True
+    conv = await conversation_controller.get_or_create(
+        agent_id=agent.id, user_id=user_id,
     )
-
-    chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
+    history = await conversation_controller.get_messages(
+        conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True,
+    )
 
     start_time = time.time()
-    result = await rag_service.chat(
-        question=chat_in.question,
-        history=history,
-        knowledge_bases=list(knowledge_bases),
-        chat_model_config=chat_model,
-        system_prompt=agent.system_prompt,
-        doc_templates=list(doc_templates) if doc_templates else None,
-    )
+    result = await agent_instance.execute({
+        "question": chat_in.question,
+        "history": history,
+        "user_id": user_id,
+        "agent_id": agent.id,
+    })
     elapsed_ms = int((time.time() - start_time) * 1000)
 
-    await ChatMessage.create(
-        conversation_id=conv.id, type="user", content=chat_in.question
-    )
-    for tc in result.get("tool_calls", []):
-        await ChatMessage.create(
-            conversation_id=conv.id,
-            type="tool_call",
-            content=json.dumps({"tool_name": tc["tool_name"], "tool_input": tc["tool_input"]}, ensure_ascii=False),
-        )
-        await ChatMessage.create(
-            conversation_id=conv.id,
-            type="tool_call_result",
-            content=json.dumps({"tool_name": tc["tool_name"], "result": tc["tool_output"]}, ensure_ascii=False),
-        )
-    await ChatMessage.create(
-        conversation_id=conv.id,
-        type="assistant",
-        content=result["answer"],
-        retrieved_chunks=result["sources"],
-        response_time_ms=elapsed_ms,
-    )
-    tool_msg_count = len(result.get("tool_calls", [])) * 2
-    conv.message_count += 2 + tool_msg_count
-    conv.last_active_at = datetime.now()
-    await conv.save()
+    await _save_chat_messages(conv, chat_in.question, result, elapsed_ms)
 
     logger.info(
-        "[Agent] Chat: agent_id=%s, user_id=%s, elapsed=%dms",
-        chat_in.agent_id, user_id, elapsed_ms,
+        "[Agent] Chat: agent_id=%s, code=%s, user_id=%s, elapsed=%dms",
+        chat_in.agent_id, agent.code, user_id, elapsed_ms,
     )
     return Success(data=result)
 
 
 @router.post("/chat/stream", summary="与Agent对话（流式SSE）")
 async def chat_with_agent_stream(chat_in: ChatRequest):
-    """流式对话接口，使用 SSE 格式返回
-    
-    连接超时：5秒
-    流式请求超时：10秒
-    """
-    from app.services.rag_service import rag_service
-    import asyncio
-
     user_id = CTX_USER_ID.get()
 
     agent = await agent_controller.get(id=chat_in.agent_id)
     if not agent.is_active:
         return Fail(msg="该Agent已停用")
+    if not agent.code:
+        return Fail(msg="该Agent未配置路由标识(code)，无法执行")
 
-    knowledge_bases = await agent.knowledge_bases.all()
-    if not knowledge_bases:
-        return Fail(msg="该Agent未关联任何知识库")
+    try:
+        llm = await _get_chat_model()
+        agent_instance = await _route_agent(agent.code, llm)
+    except RuntimeError as e:
+        return Fail(msg=str(e))
+    except KeyError:
+        return Fail(msg=f"Agent '{agent.code}' 未注册，请检查 agents/ 目录")
 
-    # 加载绑定的文档模板
-    doc_templates = await agent.doc_templates.filter(is_deleted=False).all()
-
-    conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user_id)
-
-    history = await conversation_controller.get_messages(
-        conv.id, limit=agent.max_history_turns * 2, agent_friendly=True
+    conv = await conversation_controller.get_or_create(
+        agent_id=agent.id, user_id=user_id,
     )
-
-    chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
+    history = await conversation_controller.get_messages(
+        conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True,
+    )
 
     start_time = time.time()
     full_answer = ""
@@ -189,73 +216,63 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
     async def event_generator():
         nonlocal full_answer, sources_data, tool_calls_data
         try:
-            logger.debug("[Agent] Chat stream started: agent_id=%s, user_id=%s", chat_in.agent_id, user_id)
-            async for chunk in rag_service.chat_stream(
-                question=chat_in.question,
-                history=history,
-                knowledge_bases=list(knowledge_bases),
-                chat_model_config=chat_model,
-                system_prompt=agent.system_prompt,
-                doc_templates=list(doc_templates) if doc_templates else None,
-            ):
-                chunk_type = chunk.get("type")
-                content = chunk.get("content", "")
-                
-                if chunk_type == "delta":
-                    full_answer += content
-                    # SSE 格式：data: {...}\n\n
-                    yield f"data: {json.dumps({'type': 'delta', 'content': content}, ensure_ascii=False)}\n\n"
-        
-                elif chunk_type == "tool_calls":
-                    tool_calls_data = content if content else []
+            logger.debug(
+                "[Agent] Chat stream started: agent_id=%s, code=%s, user_id=%s",
+                chat_in.agent_id, agent.code, user_id,
+            )
 
-                elif chunk_type == "sources":
-                    sources_data = content if content else []
+            # 如果 Agent 支持流式执行，走流式；否则走非流式
+            if hasattr(agent_instance, 'execute_stream'):
+                async for chunk in agent_instance.execute_stream({
+                    "question": chat_in.question,
+                    "history": history,
+                    "user_id": user_id,
+                    "agent_id": agent.id,
+                }):
+                    chunk_type = chunk.get("type")
+                    content = chunk.get("content", "")
+
+                    if chunk_type == "delta":
+                        full_answer += content
+                        yield f"data: {json.dumps({'type': 'delta', 'content': content}, ensure_ascii=False)}\n\n"
+                    elif chunk_type == "tool_calls":
+                        tool_calls_data = content if content else []
+                    elif chunk_type == "sources":
+                        sources_data = content if content else []
+                        yield f"data: {json.dumps({'type': 'sources', 'content': sources_data}, ensure_ascii=False)}\n\n"
+                    elif chunk_type == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'content': content}, ensure_ascii=False)}\n\n"
+                        return
+            else:
+                result = await agent_instance.execute({
+                    "question": chat_in.question,
+                    "history": history,
+                    "user_id": user_id,
+                    "agent_id": agent.id,
+                })
+                full_answer = result.get("answer", "")
+                sources_data = result.get("sources", [])
+                tool_calls_data = result.get("tool_calls", [])
+                yield f"data: {json.dumps({'type': 'delta', 'content': full_answer}, ensure_ascii=False)}\n\n"
+                if sources_data:
                     yield f"data: {json.dumps({'type': 'sources', 'content': sources_data}, ensure_ascii=False)}\n\n"
-                  
-                elif chunk_type == "error":
-                    yield f"data: {json.dumps({'type': 'error', 'content': content}, ensure_ascii=False)}\n\n"
-                  
-                    return
-                    
-            # 发送完成标记
+
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+
         except Exception as e:
             logger.error(f"[Agent] Chat stream error: {e}")
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
         finally:
-            # 保存对话记录
             try:
                 elapsed_ms = int((time.time() - start_time) * 1000)
-                await ChatMessage.create(
-                    conversation_id=conv.id, type="user", content=chat_in.question
+                await _save_chat_messages(
+                    conv, chat_in.question,
+                    {"answer": full_answer or "（无响应）", "sources": sources_data, "tool_calls": tool_calls_data},
+                    elapsed_ms,
                 )
-                for tc in tool_calls_data:
-                    await ChatMessage.create(
-                        conversation_id=conv.id,
-                        type="tool_call",
-                        content=json.dumps({"tool_name": tc["tool_name"], "tool_input": tc["tool_input"]}, ensure_ascii=False),
-                    )
-                    await ChatMessage.create(
-                        conversation_id=conv.id,
-                        type="tool_call_result",
-                        content=json.dumps({"tool_name": tc["tool_name"], "result": tc["tool_output"]}, ensure_ascii=False),
-                    )
-                await ChatMessage.create(
-                    conversation_id=conv.id,
-                    type="assistant",
-                    content=full_answer or "（无响应）",
-                    retrieved_chunks=sources_data,
-                    response_time_ms=elapsed_ms,
-                )
-                tool_msg_count = len(tool_calls_data) * 2
-                conv.message_count += 2 + tool_msg_count
-                conv.last_active_at = datetime.now()
-                await conv.save()
-                
                 logger.info(
-                    "[Agent] Chat stream completed: agent_id=%s, user_id=%s, elapsed=%dms",
-                    chat_in.agent_id, user_id, elapsed_ms,
+                    "[Agent] Chat stream completed: agent_id=%s, code=%s, user_id=%s, elapsed=%dms",
+                    chat_in.agent_id, agent.code, user_id, elapsed_ms,
                 )
             except Exception as save_err:
                 logger.error(f"[Agent] Failed to save chat message: {save_err}")
@@ -266,6 +283,6 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
+            "X-Accel-Buffering": "no",
         },
     )

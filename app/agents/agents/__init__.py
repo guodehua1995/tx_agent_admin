@@ -3,10 +3,12 @@
 """
 
 # 导入所有 Agent 以触发注册
-from .doc_to_markdown import DocToMarkdownAgent
+from .contract import ContractAgent
 from .contract_review import ContractClauseReviewAgent
+from .doc_to_markdown import DocToMarkdownAgent
 
 __all__ = [
-    "DocToMarkdownAgent",
+    "ContractAgent",
     "ContractClauseReviewAgent",
+    "DocToMarkdownAgent",
 ]

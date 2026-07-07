@@ -92,17 +92,9 @@ class ReviewRecord(BaseModel, TimestampMixin):
 
 class Agent(BaseModel, TimestampMixin):
     name = fields.CharField(max_length=100, unique=True, description="Agent名称")
+    code = fields.CharField(max_length=50, unique=True, null=True, description="路由标识，对应 AgentRegistry 中的 agent name")
     description = fields.TextField(null=True, description="描述")
-    chat_model_id = fields.IntField(description="对话模型ID -> llm_provider_config.id")
-    system_prompt = fields.TextField(null=True, description="系统提示词")
-    max_history_turns = fields.IntField(default=10, description="历史对话轮数")
     is_active = fields.BooleanField(default=True, description="是否启用")
-    knowledge_bases = fields.ManyToManyField(
-        "models.KnowledgeBase", related_name="agents", through="agent_knowledge_base"
-    )
-    doc_templates = fields.ManyToManyField(
-        "models.DocTemplate", related_name="agents", through="agent_doc_template"
-    )
 
     class Meta:
         table = "agent"

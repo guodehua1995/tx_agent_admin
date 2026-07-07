@@ -7,38 +7,75 @@ import json
 import time
 from datetime import datetime
 
+from langchain_openai import ChatOpenAI
 from pypinyin import lazy_pinyin
 
+from app.controllers.ai_config import ai_config_controller
 from app.controllers.conversation import conversation_controller
 from app.controllers.feishu_bot import feishu_bot_controller
 from app.models.admin import User
-from app.models.rag import Agent, ChatMessage, FeishuBotConfig, LLMProviderConfig
+from app.models.rag import Agent, ChatMessage, FeishuBotConfig
 from app.services.feishu_service import FeishuService
-from app.services.rag_service import rag_service
 from app.utils.password import get_password_hash
 
 from app.log import logger
+
+DEFAULT_MAX_HISTORY_TURNS = 10
 
 
 class BotService:
     """飞书机器人消息处理服务"""
 
+    async def _get_chat_model(self):
+        """获取活跃的 Chat 模型（LangChain ChatOpenAI 实例）"""
+        models = await ai_config_controller.get_active_chat_models()
+        if not models:
+            raise RuntimeError("无可用 Chat 模型")
+        cfg = models[0]
+        extra = cfg.extra_config or {}
+        return ChatOpenAI(
+            model=cfg.model_name,
+            api_key=cfg.api_key,
+            base_url=cfg.api_base_url,
+            temperature=extra.get("temperature", 0.7),
+            max_tokens=extra.get("max_tokens") or cfg.max_tokens,
+        )
+
+    async def _route_agent(self, agent_code: str, llm):
+        """按 code 路由到对应的 Agent 实例"""
+        from app.agents.registry import AgentRegistry
+
+        agent_cls = AgentRegistry.get(agent_code)
+        return agent_cls(llm=llm)
+
     async def handle_message(
         self, bot_id: int, feishu_open_id: str, chat_id: str, question: str
     ) -> dict:
-        """处理飞书机器人消息，返回 RAG 问答结果"""
-        # 1. bot_config → agent → knowledge_bases
+        """处理飞书机器人消息，按 agent.code 路由到对应 Agent 执行"""
+        # 1. bot → agent
         bot = await feishu_bot_controller.get(id=bot_id)
         if not bot.agent_id:
             return {"answer": "该机器人尚未绑定 Agent，请联系管理员配置", "sources": []}
         agent = await Agent.get(id=bot.agent_id)
-        knowledge_bases = await agent.knowledge_bases.all()
-        if not knowledge_bases:
-            return {"answer": "该 Agent 未关联任何知识库", "sources": []}
+        if not agent.is_active:
+            return {"answer": "该 Agent 已停用", "sources": []}
+        if not agent.code:
+            return {"answer": "该 Agent 未配置路由标识(code)，无法执行", "sources": []}
 
-        logger.debug("bot get knowledge bases")
+        logger.debug("bot get agent: name=%s, code=%s", agent.name, agent.code)
 
-        # 2. feishu_open_id → user（不存在则自动创建）
+        # 2. 获取 LLM + 路由到 Agent
+        try:
+            llm = await self._get_chat_model()
+            agent_instance = await self._route_agent(agent.code, llm)
+        except RuntimeError as e:
+            return {"answer": str(e), "sources": []}
+        except KeyError:
+            return {"answer": f"Agent '{agent.code}' 未注册，请检查 agents/ 目录", "sources": []}
+
+        logger.debug("bot routed to agent: code=%s", agent.code)
+
+        # 3. feishu_open_id → user（不存在则自动创建）
         user = await User.filter(feishu_open_id=feishu_open_id).first()
         if not user:
             user = await self._auto_create_user(bot, feishu_open_id)
@@ -46,31 +83,28 @@ class BotService:
                 return {"answer": "自动注册失败，请联系管理员手动添加", "sources": []}
         logger.debug("bot get user")
 
-        # 3. 获取/创建 conversation
+        # 4. 获取/创建 conversation
         conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user.id)
         logger.debug("bot get conversation")
 
-        # 4. 加载历史消息
+        # 5. 加载历史消息
         history = await conversation_controller.get_messages(
-            conv.id, limit=agent.max_history_turns * 2, agent_friendly=True
+            conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True
         )
         logger.debug("bot get history")
 
-        # 5. RAG 问答
-        chat_model = await LLMProviderConfig.get(id=agent.chat_model_id)
-        logger.debug("bot get chat model")
+        # 6. 执行 Agent
         start_time = time.time()
-        result = await rag_service.chat(
-            question=question,
-            history=history,
-            knowledge_bases=list(knowledge_bases),
-            chat_model_config=chat_model,
-            system_prompt=agent.system_prompt,
-        )
-        logger.debug("bot get rag service")
+        result = await agent_instance.execute({
+            "question": question,
+            "history": history,
+            "user_id": user.id,
+            "agent_id": agent.id,
+        })
         elapsed_ms = int((time.time() - start_time) * 1000)
+        logger.debug("bot agent executed")
 
-        # 6. 保存消息记录
+        # 7. 保存消息记录
         logger.debug("bot create user message")
         await ChatMessage.create(
             conversation_id=conv.id, type="user", content=question, feishu_message_id=None
@@ -98,7 +132,7 @@ class BotService:
             conversation_id=conv.id,
             type="assistant",
             content=result["answer"],
-            retrieved_chunks=result["sources"],
+            retrieved_chunks=result.get("sources", []),
             response_time_ms=elapsed_ms,
         )
 

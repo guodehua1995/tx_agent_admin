@@ -22,10 +22,11 @@ class BaseAgent(ABC):
         self.llm = llm
         self.prompt = self._build_prompt()
 
-    @abstractmethod
     def _build_prompt(self) -> ChatPromptTemplate:
-        """构建提示词模板"""
-        pass
+        """构建提示词模板（默认空实现，子类可按需覆盖）"""
+        return ChatPromptTemplate.from_messages([
+            ("system", ""),
+        ])
 
     @abstractmethod
     async def execute(self, input_data: Dict[str, Any], **kwargs) -> Dict[str, Any]:
