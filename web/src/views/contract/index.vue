@@ -104,6 +104,24 @@ const columns = [
     },
   },
   {
+    title: '合同链接',
+    key: 'document_url',
+    width: 120,
+    align: 'center',
+    render(row) {
+      if (!row.document_url) return h('span', '-')
+      return h(
+        NButton,
+        {
+          text: true,
+          type: 'primary',
+          onClick: () => window.open(row.document_url, '_blank'),
+        },
+        { default: () => '访问合同' }
+      )
+    },
+  },
+  {
     title: '甲方',
     key: 'party_a_name',
     width: 140,
@@ -156,11 +174,7 @@ const columns = [
       const now = new Date()
       const diffDays = Math.ceil((exp - now) / (1000 * 60 * 60 * 24))
       const type = diffDays < 0 ? 'error' : diffDays < 30 ? 'warning' : 'default'
-      return h(
-        NTag,
-        { type, size: 'small' },
-        { default: () => formatDate(row.expiry_date) }
-      )
+      return h(NTag, { type, size: 'small' }, { default: () => formatDate(row.expiry_date) })
     },
   },
   {
@@ -352,9 +366,15 @@ const columns = [
             v-model:value="modalForm.signing_date"
             type="date"
             clearable
-            :default-value="modalForm.signing_date ? new Date(modalForm.signing_date).getTime() : null"
+            :default-value="
+              modalForm.signing_date ? new Date(modalForm.signing_date).getTime() : null
+            "
             :value="modalForm.signing_date ? new Date(modalForm.signing_date).getTime() : null"
-            :on-update:value="(v) => { if (v) modalForm.signing_date = new Date(v).toISOString() }"
+            :on-update:value="
+              (v) => {
+                if (v) modalForm.signing_date = new Date(v).toISOString()
+              }
+            "
           />
         </NFormItem>
         <NFormItem label="生效日期" path="effective_date">
@@ -363,7 +383,11 @@ const columns = [
             type="date"
             clearable
             :value="modalForm.effective_date ? new Date(modalForm.effective_date).getTime() : null"
-            :on-update:value="(v) => { if (v) modalForm.effective_date = new Date(v).toISOString() }"
+            :on-update:value="
+              (v) => {
+                if (v) modalForm.effective_date = new Date(v).toISOString()
+              }
+            "
           />
         </NFormItem>
         <NFormItem label="到期日期" path="expiry_date">
@@ -372,7 +396,11 @@ const columns = [
             type="date"
             clearable
             :value="modalForm.expiry_date ? new Date(modalForm.expiry_date).getTime() : null"
-            :on-update:value="(v) => { if (v) modalForm.expiry_date = new Date(v).toISOString() }"
+            :on-update:value="
+              (v) => {
+                if (v) modalForm.expiry_date = new Date(v).toISOString()
+              }
+            "
           />
         </NFormItem>
         <NFormItem label="合同金额" path="total_amount">

@@ -105,6 +105,7 @@ async def _contract_search(
                     "signing_date": str(c.get("signing_date", ""))[:10] if c.get("signing_date") else None,
                     "expiry_date": str(c.get("expiry_date", ""))[:10] if c.get("expiry_date") else None,
                     "clause_count": c.get("clause_count"),
+                    "url": c.get("document_url"),
                 }
                 for c in items
             ],
@@ -186,6 +187,7 @@ async def _contract_summary_search(
                     "id": c["id"],
                     "project_name": c.get("project_name"),
                     "summary": c.get("summary", "")[:500],
+                    "url": c.get("document_url"),
                 }
                 for c in items
             ],
@@ -265,6 +267,7 @@ async def _find_similar_contracts(
                     "type": c.get("contract_type_name"),
                     "party_a": c.get("party_a_name"),
                     "party_b": c.get("party_b_name"),
+                    "url": c.get("document_url"),
                 }
                 for c in result
             ],

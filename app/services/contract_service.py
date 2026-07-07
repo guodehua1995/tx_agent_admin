@@ -17,6 +17,19 @@ from app.models.rag import Document
 logger = logging.getLogger(__name__)
 
 
+def _resolve_document_url(doc: Document | None) -> str | None:
+    """从 Document 解析外部访问链接，兼容旧数据。"""
+    if not doc or not doc.source_meta:
+        return None
+    meta = doc.source_meta
+    source_type = doc.source_type
+    if source_type == "feishu_doc":
+        return meta.get("feishu_url") or None
+    if source_type == "web_url":
+        return meta.get("url") or None
+    return None
+
+
 class ContractService:
     """合同管理业务逻辑"""
 
@@ -80,6 +93,7 @@ class ContractService:
         if doc:
             result["document_title"] = doc.title
             result["document_status"] = doc.status
+            result["document_url"] = contract.document_url or _resolve_document_url(doc)
 
         # 条款树
         clauses = await contract_clause_controller.get_tree_by_contract(contract_id)
@@ -390,6 +404,10 @@ class ContractService:
             if item.party_b_client_id:
                 client = await Client.filter(id=item.party_b_client_id).first()
                 d["party_b_name"] = client.name if client else None
+            # 合同链接（优先取已落库字段，为空时动态解析 Document.source_meta）
+            if not d.get("document_url"):
+                doc = await Document.filter(id=item.document_id).first()
+                d["document_url"] = _resolve_document_url(doc)
             result_items.append(d)
 
         return {"total": total, "items": result_items}
@@ -403,7 +421,14 @@ class ContractService:
             page=params.get("page", 1),
             page_size=params.get("page_size", 20),
         )
-        return {"total": total, "items": [await item.to_dict() for item in items]}
+        result_items = []
+        for item in items:
+            d = await item.to_dict()
+            if not d.get("document_url"):
+                doc = await Document.filter(id=item.document_id).first()
+                d["document_url"] = _resolve_document_url(doc)
+            result_items.append(d)
+        return {"total": total, "items": result_items}
 
     async def search_clauses(self, params: dict) -> dict:
         """搜索条款"""
@@ -496,6 +521,9 @@ class ContractService:
             if c.contract_type_id:
                 ct = await ContractType.filter(id=c.contract_type_id).first()
                 d["contract_type_name"] = ct.name if ct else None
+            if not d.get("document_url"):
+                doc = await Document.filter(id=c.document_id).first()
+                d["document_url"] = _resolve_document_url(doc)
             result.append(d)
 
         return result

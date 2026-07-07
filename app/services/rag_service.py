@@ -385,8 +385,17 @@ class RAGService:
                     delta = event.delta or ""
                     if delta:
                         yield {"type": "delta", "content": delta}
+                    # 调试：打印 tool_calls
+                    if event.tool_calls:
+                        logger.debug(f"[RAG] AgentStream tool_calls: {event.tool_calls}")
 
             response = await handler
+
+            # 调试：打印 response 的原始内容
+            logger.debug(
+                f"[RAG] response blocks: {[type(b).__name__ for b in response.response.blocks]}"
+            )
+            logger.debug(f"[RAG] response tool_calls count: {len(response.tool_calls)}")
 
             # 收集工具调用数据
             tool_calls_data = []

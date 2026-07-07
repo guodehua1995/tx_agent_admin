@@ -32,6 +32,22 @@ from app.settings import settings
 from app.log import logger
 
 
+def resolve_document_url(doc: Document) -> str | None:
+    """从 Document.source_meta 中解析外部访问链接。
+
+    - feishu_doc: 取 source_meta.feishu_url
+    - web_url: 取 source_meta.url
+    - file_upload: 无外部链接，返回 None
+    """
+    meta = doc.source_meta or {}
+    source_type = doc.source_type
+    if source_type == DocumentSourceType.FEISHU_DOC:
+        return meta.get("feishu_url") or None
+    if source_type == DocumentSourceType.WEB_URL:
+        return meta.get("url") or None
+    return None
+
+
 def _split_clause_content(text: str, max_chars: int = 500) -> list[str]:
     """将条款内容按段落切分为多个子chunk，用于大条款的向量化。
 
@@ -429,6 +445,7 @@ class DocumentPipeline:
             contract_type = await ContractType.filter(code="other", is_deleted=False).first()
 
         # 创建 Contract
+        document_url = resolve_document_url(doc)
         contract = await Contract.create(
             document_id=doc.id,
             contract_type_id=contract_type.id if contract_type else None,
@@ -436,6 +453,7 @@ class DocumentPipeline:
             party_b_client_id=party_b_id,
             project_name=doc.title,
             summary=doc.summary,
+            document_url=document_url,
             clause_count=0,
         )
 

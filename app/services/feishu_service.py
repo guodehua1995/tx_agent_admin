@@ -142,42 +142,128 @@ class FeishuService:
         await self.remove_message_reaction(app_id, app_secret, message_id, old_reaction_id)
         return await self.add_message_reaction(app_id, app_secret, message_id, new_emoji_type)
 
-    # ── 消息卡片构建 ──────────────────────────────────────────────────────
+    # ── 消息构建 ──────────────────────────────────────────────────────
+
+    def _split_md_tables(self, text: str) -> list[dict]:
+        """将 Markdown 文本按表格块拆分，返回交替的 text / table 片段。"""
+        lines = text.split("\n")
+        segments: list[dict] = []
+        buf: list[str] = []
+        i = 0
+
+        def flush():
+            if buf:
+                segments.append({"type": "text", "content": "\n".join(buf).strip()})
+                buf.clear()
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if (
+                line.startswith("|")
+                and line.count("|") >= 3
+                and i + 1 < len(lines)
+                and re.match(r"^\|[\s\-:|]+\|$", lines[i + 1].strip())
+            ):
+                flush()
+                headers = [c.strip() for c in line.split("|")[1:-1]]
+                rows: list[list[str]] = []
+                i += 2
+                while i < len(lines):
+                    row_line = lines[i].strip()
+                    if row_line.startswith("|") and row_line.count("|") >= 3:
+                        cells = [c.strip() for c in row_line.split("|")[1:-1]]
+                        while len(cells) < len(headers):
+                            cells.append("")
+                        rows.append(cells[: len(headers)])
+                        i += 1
+                    else:
+                        break
+                if rows:
+                    segments.append({"type": "table", "headers": headers, "rows": rows})
+                else:
+                    buf.append(lines[i - 2])
+                    if i - 1 < len(lines):
+                        buf.append(lines[i - 1])
+            else:
+                buf.append(lines[i])
+                i += 1
+
+        flush()
+        return segments
+
+    def _visible_len(self, text: str) -> int:
+        """计算文本渲染后的可见长度（去除 Markdown 语法符号）。"""
+        t = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+        t = re.sub(r'(\*\*|__|\*|_|~~|`)', '', t)
+        return len(t)
+
+    def _calc_col_width(self, max_len: int) -> str:
+        """根据列内容最大可见字符数返回飞书卡片列宽权重。"""
+        if max_len <= 5:
+            return "weighted_1"
+        elif max_len <= 12:
+            return "weighted_2"
+        elif max_len <= 25:
+            return "weighted_3"
+        else:
+            return "weighted_4"
+
+    def _build_table_elements(self, headers: list[str], rows: list[list[str]]) -> list[dict]:
+        """将表头和数据行转换为飞书卡片 column_set 元素列表。"""
+        elements: list[dict] = []
+        num_cols = len(headers)
+
+        col_widths: list[str] = []
+        for col_idx in range(num_cols):
+            max_len = self._visible_len(headers[col_idx])
+            for row in rows:
+                if col_idx < len(row):
+                    max_len = max(max_len, self._visible_len(row[col_idx]))
+            col_widths.append(self._calc_col_width(max_len))
+
+        def cell_col(content: str, bold: bool = False, col_idx: int = 0) -> dict:
+            if bold:
+                content = f"**{content}**"
+            return {
+                "tag": "column",
+                "width": col_widths[col_idx] if col_idx < len(col_widths) else "weighted_2",
+                "elements": [{"tag": "markdown", "content": content or " "}],
+            }
+
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": "grey",
+            "columns": [cell_col(h, bold=True, col_idx=i) for i, h in enumerate(headers)],
+        })
+
+        for idx, row in enumerate(rows):
+            bg = "grey" if idx % 2 == 1 else "default"
+            elements.append({
+                "tag": "column_set",
+                "flex_mode": "none",
+                "background_style": bg,
+                "columns": [cell_col(row[j], col_idx=j) for j in range(num_cols)],
+            })
+
+        elements.append({"tag": "markdown", "content": " "})
+        return elements
 
     async def build_answer_card(self, answer: str, sources: list, image_keys: list[str] | None = None) -> dict:
-        """构建消息卡片
-
-        飞书卡片 markdown 标签支持的格式：
-        - **粗体**
-        - *斜体*
-        - ~~删除线~~
-        - [链接](url)
-        - 无序列表 (- )
-        - 有序列表 (1. )
-        - 代码块
-        - > 引用
-
-        不支持 # 标题，需要用其他方式处理
+        """构建 interactive 卡片，lark_md 渲染 Markdown（不含表格），表格转 column_set。
 
         Args:
-            image_keys: 可选的飞书 IM 图片 image_key 列表，追加为卡片 img 元素
+            image_keys: 可选的飞书 IM 图片 image_key 列表
         """
-        # 处理标题：将 # 转为加粗文本
-        import re
+        # 将 # 标题转为加粗文本（lark_md 不支持标题）
         def convert_heading(match):
             level = len(match.group(1))
             text = match.group(2).strip()
-            if level == 1:
-                return f"**{text}**"
-            elif level == 2:
-                return f"**{text}**"
-            else:  # level >= 3
-                return f"*{text}*"
+            return f"**{text}**" if level <= 2 else f"*{text}*"
 
-        # 将 # 标题转换为加粗文本
         answer = re.sub(r'^(#{1,3})\s+(.+)$', convert_heading, answer, flags=re.MULTILINE)
 
-        source_elements = ""
+        source_lines = ""
         for i, src in enumerate(sources[:3], 1):
             metadata = src.get("metadata", {})
             type = metadata.get("type")
@@ -185,13 +271,22 @@ class FeishuService:
                 title = metadata.get("title", "未知来源")
                 url = metadata.get("url")
                 if url:
-                    source_elements += f"[{title}]({url})\n"
+                    source_lines += f"[{title}]({url})\n"
 
-        elements = [
-            {"tag": "markdown", "content": answer},
-        ]
+        # 拆分文本 / 表格，表格转 column_set
+        segments = self._split_md_tables(answer)
+        elements: list[dict] = []
 
-        # PDF/PPT 召回页截图以原生 img 元素插入，避免依赖外链可达性
+        for seg in segments:
+            if seg["type"] == "text":
+                if seg["content"]:
+                    elements.append({"tag": "markdown", "content": seg["content"]})
+            elif seg["type"] == "table":
+                elements.extend(self._build_table_elements(seg["headers"], seg["rows"]))
+
+        if not elements:
+            elements = [{"tag": "markdown", "content": answer}]
+
         if image_keys:
             elements.append({"tag": "hr"})
             elements.append({"tag": "markdown", "content": "**参考页截图：**"})
@@ -204,10 +299,10 @@ class FeishuService:
                     "preview": True,
                 })
 
-        if source_elements:
+        if source_lines:
             elements.extend([
                 {"tag": "hr"},
-                {"tag": "markdown", "content": "**参考来源:**\n" + source_elements},
+                {"tag": "markdown", "content": "**参考来源:**\n" + source_lines},
             ])
 
         return {

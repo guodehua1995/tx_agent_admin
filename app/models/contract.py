@@ -39,6 +39,7 @@ class Contract(BaseModel, TimestampMixin):
     total_amount = fields.DecimalField(max_digits=14, decimal_places=2, null=True, description="合同金额")
     clause_count = fields.IntField(default=0, description="条款数量")
     summary = fields.TextField(null=True, description="合同摘要")
+    document_url = fields.CharField(max_length=1000, null=True, description="合同文档链接（来自 Document.source_meta）")
     is_deleted = fields.BooleanField(default=False, description="是否已删除", db_index=True)
 
     class Meta:

@@ -226,11 +226,7 @@ onMounted(() => {
       <NButton @click="goBack">
         <TheIcon icon="material-symbols:arrow-back" :size="18" class="mr-5" />返回列表
       </NButton>
-      <NButton
-        type="primary"
-        style="margin-left: 12px"
-        @click="goToCompare"
-      >
+      <NButton type="primary" style="margin-left: 12px" @click="goToCompare">
         <TheIcon icon="material-symbols:compare-arrows" :size="18" class="mr-5" />对比合同
       </NButton>
     </template>
@@ -258,6 +254,18 @@ onMounted(() => {
               </NTag>
               <span v-else>-</span>
             </NDescriptionsItem>
+            <NDescriptionsItem label="合同链接">
+              <a
+                v-if="contract.document_url"
+                :href="contract.document_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                style="color: #1890ff; text-decoration: none"
+              >
+                <TheIcon icon="material-symbols:link" :size="16" class="mr-5" />访问合同
+              </a>
+              <span v-else>-</span>
+            </NDescriptionsItem>
             <NDescriptionsItem label="甲方">
               {{ contract.party_a_name || '-' }}
             </NDescriptionsItem>
@@ -277,8 +285,8 @@ onMounted(() => {
                   new Date(contract.expiry_date) < new Date()
                     ? 'error'
                     : (new Date(contract.expiry_date) - new Date()) / (1000 * 60 * 60 * 24) < 30
-                      ? 'warning'
-                      : 'default'
+                    ? 'warning'
+                    : 'default'
                 "
                 size="small"
               >
@@ -287,7 +295,9 @@ onMounted(() => {
               <span v-else>-</span>
             </NDescriptionsItem>
             <NDescriptionsItem label="合同金额">
-              {{ contract.total_amount != null ? Number(contract.total_amount).toLocaleString() : '-' }}
+              {{
+                contract.total_amount != null ? Number(contract.total_amount).toLocaleString() : '-'
+              }}
             </NDescriptionsItem>
             <NDescriptionsItem label="条款数量">
               {{ contract.clause_count || 0 }}
@@ -307,8 +317,8 @@ onMounted(() => {
                 v-if="clauseTree().length > 0"
                 :data="clauseTree()"
                 :default-expand-all="false"
-                block-line
                 selectable
+                block-line
                 @update:selected-keys="(keys, option) => handleNodeSelect(keys, option)"
               />
               <NEmpty v-else description="暂无条款数据" />
@@ -322,7 +332,14 @@ onMounted(() => {
                 </NButton>
               </template>
               <template v-if="selectedClause">
-                <div style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between">
+                <div
+                  style="
+                    margin-bottom: 12px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                  "
+                >
                   <div>
                     <NTag type="info" size="small" style="margin-right: 8px">
                       序号: {{ selectedClause.clause_index }}
@@ -338,7 +355,11 @@ onMounted(() => {
                     <NPopconfirm @positive-click="handleDelete">
                       <template #trigger>
                         <NButton size="small" type="error">
-                          <TheIcon icon="material-symbols:delete-outline" :size="16" class="mr-5" />删除
+                          <TheIcon
+                            icon="material-symbols:delete-outline"
+                            :size="16"
+                            class="mr-5"
+                          />删除
                         </NButton>
                       </template>
                       确定删除该条款及其子条款吗？向量库将同步清理。
@@ -371,17 +392,10 @@ onMounted(() => {
                     style="margin-bottom: 12px"
                   />
                   <div style="display: flex; gap: 8px">
-                    <NButton
-                      type="primary"
-                      size="small"
-                      :loading="editLoading"
-                      @click="saveEdit"
-                    >
+                    <NButton type="primary" size="small" :loading="editLoading" @click="saveEdit">
                       保存
                     </NButton>
-                    <NButton size="small" @click="cancelEdit">
-                      取消
-                    </NButton>
+                    <NButton size="small" @click="cancelEdit"> 取消 </NButton>
                   </div>
                 </template>
                 <!-- 预览模式 -->
@@ -401,10 +415,7 @@ onMounted(() => {
         <NModal v-model:show="showCreateModal" title="新增条款" preset="card" style="width: 600px">
           <NForm label-placement="left" label-width="80">
             <NFormItem label="条款标题" required>
-              <NInput
-                v-model:value="createForm.clause_title"
-                placeholder="如：违约责任"
-              />
+              <NInput v-model:value="createForm.clause_title" placeholder="如：违约责任" />
             </NFormItem>
             <NFormItem label="条款原文" required>
               <NInput
