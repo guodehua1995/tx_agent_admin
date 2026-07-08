@@ -62,20 +62,16 @@ const api_ids = ref([])
 const apiTree = ref([])
 
 function buildApiTree(data) {
-  const processedData = []
   const groupedData = {}
 
   data.forEach((item) => {
     const tags = item['tags']
-    const pathParts = item['path'].split('/')
-    const path = pathParts.slice(0, -1).join('/')
-    const summary = tags.charAt(0).toUpperCase() + tags.slice(1)
     const unique_id = item['method'].toLowerCase() + item['path']
-    if (!(path in groupedData)) {
-      groupedData[path] = { unique_id: path, path: path, summary: summary, children: [] }
+    if (!(tags in groupedData)) {
+      groupedData[tags] = { unique_id: tags, path: tags, summary: tags, children: [] }
     }
 
-    groupedData[path].children.push({
+    groupedData[tags].children.push({
       id: item['id'],
       path: item['path'],
       method: item['method'],
@@ -83,8 +79,7 @@ function buildApiTree(data) {
       unique_id: unique_id,
     })
   })
-  processedData.push(...Object.values(groupedData))
-  return processedData
+  return Object.values(groupedData)
 }
 
 onMounted(() => {

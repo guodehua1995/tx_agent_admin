@@ -1,5 +1,5 @@
 <script setup>
-import { h, onMounted, ref, resolveDirective, withDirectives } from 'vue'
+import { h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NButton,
@@ -7,10 +7,8 @@ import {
   NFormItem,
   NInput,
   NInputNumber,
-  NModal,
   NPopconfirm,
   NSelect,
-  NSpin,
   NTag,
   NDatePicker,
   useMessage,
@@ -30,11 +28,35 @@ defineOptions({ name: '合同管理' })
 const router = useRouter()
 const $table = ref(null)
 const queryItems = ref({})
-const vPermission = resolveDirective('permission')
 const message = useMessage()
 
 const contractTypeOptions = ref([])
 const clientOptions = ref([])
+
+// ── 多选删除 ──────────────────────────────────────────────────
+
+const checkedRowKeys = ref([])
+const batchDeleteLoading = ref(false)
+
+async function handleBatchDelete() {
+  batchDeleteLoading.value = true
+  try {
+    let count = 0
+    for (const id of checkedRowKeys.value) {
+      try {
+        await api.deleteContract({ id })
+        count++
+      } catch {
+        // 单条失败继续
+      }
+    }
+    message.success(`已删除 ${count} 条合同`)
+    checkedRowKeys.value = []
+    $table.value?.handleSearch()
+  } finally {
+    batchDeleteLoading.value = false
+  }
+}
 
 const {
   modalVisible,
@@ -62,15 +84,12 @@ function handleView(row) {
 
 // ── 审查相关 ──────────────────────────────────────────────────────
 
-const reviewModalVisible = ref(false)
-const reviewLoading = ref(false)
-const reviewResult = ref(null)
-
 async function handleTriggerReview(row) {
   try {
     const res = await api.triggerContractReview({ contract_id: row.id })
     if (res.code === 200) {
       message.success(res.data?.message || '已加入审查队列')
+      $table.value?.handleSearch()
     } else {
       message.warning(res.msg || '触发失败')
     }
@@ -80,61 +99,27 @@ async function handleTriggerReview(row) {
 }
 
 async function handleViewReview(row) {
-  reviewModalVisible.value = true
-  reviewLoading.value = true
-  reviewResult.value = null
   try {
     const res = await api.getReviewResult({ contract_id: row.id })
     if (res.code === 200) {
-      reviewResult.value = res.data
+      const data = res.data
+      if (data.status === 'completed' && data.feishu_doc_url) {
+        window.open(data.feishu_doc_url, '_blank')
+      } else if (data.status === 'pending' || data.status === 'analyzing') {
+        message.info('审查任务正在处理中，请稍后再查看')
+      } else if (data.status === 'failed') {
+        message.error(`审查失败：${data.error_message || '未知错误'}`)
+      } else if (data.status === 'completed' && !data.feishu_doc_url) {
+        message.warning('审查已完成但暂无飞书文档链接')
+      } else {
+        message.warning('暂无审查结果')
+      }
     } else {
-      reviewResult.value = { status: 'none', error_message: res.msg }
+      message.warning(res.msg || '查询审查结果失败')
     }
   } catch (e) {
-    reviewResult.value = { status: 'error', error_message: '查询失败' }
-  } finally {
-    reviewLoading.value = false
+    message.error('查询审查结果失败')
   }
-}
-
-async function handleDeleteReview() {
-  if (!reviewResult.value?.id) return
-  try {
-    const res = await api.deleteReviewResult({ report_id: reviewResult.value.id })
-    if (res.code === 200) {
-      message.success('审查报告已删除')
-      reviewModalVisible.value = false
-      reviewResult.value = null
-    } else {
-      message.warning(res.msg || '删除失败')
-    }
-  } catch (e) {
-    message.error('删除失败')
-  }
-}
-
-function getReviewStatusText(status) {
-  const map = {
-    pending: '等待审查',
-    analyzing: '审查中',
-    completed: '已完成',
-    failed: '失败',
-    none: '暂无',
-    error: '查询异常',
-  }
-  return map[status] || status
-}
-
-function getReviewStatusType(status) {
-  const map = {
-    pending: 'warning',
-    analyzing: 'info',
-    completed: 'success',
-    failed: 'error',
-    none: 'default',
-    error: 'error',
-  }
-  return map[status] || 'default'
 }
 
 async function loadOptions() {
@@ -167,39 +152,48 @@ onMounted(() => {
 
 const columns = [
   {
+    type: 'selection',
+    width: 40,
+    align: 'center',
+  },
+  {
     title: '合同名称',
     key: 'project_name',
-    width: 180,
+    width: 240,
     align: 'center',
     ellipsis: { tooltip: true },
     render(row) {
-      return h(
-        NButton,
-        {
-          text: true,
-          type: 'primary',
-          onClick: () => handleView(row),
-        },
-        { default: () => row.project_name || row.document_title || '-' }
+      const rawName = row.project_name || row.document_title || '-'
+      const maxLen = 12
+      const displayName = rawName.length > maxLen ? rawName.substring(0, maxLen) + '...' : rawName
+      const children = []
+      if (row.document_url) {
+        children.push(
+          h(
+            NButton,
+            {
+              text: true,
+              style: 'margin-right: 2px;',
+              onClick: () => window.open(row.document_url, '_blank'),
+            },
+            {
+              icon: renderIcon('material-symbols:open-in-new', { size: 14 }),
+            }
+          )
+        )
+      }
+      children.push(
+        h(
+          NButton,
+          {
+            text: true,
+            type: 'primary',
+            onClick: () => handleView(row),
+          },
+          { default: () => displayName }
+        )
       )
-    },
-  },
-  {
-    title: '合同链接',
-    key: 'document_url',
-    width: 120,
-    align: 'center',
-    render(row) {
-      if (!row.document_url) return h('span', '-')
-      return h(
-        NButton,
-        {
-          text: true,
-          type: 'primary',
-          onClick: () => window.open(row.document_url, '_blank'),
-        },
-        { default: () => '访问合同' }
-      )
+      return children
     },
   },
   {
@@ -280,85 +274,52 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 180,
     align: 'center',
     fixed: 'right',
     render(row) {
+      const hasReview = !!row.review_status
       return [
         h(
           NButton,
           {
             size: 'small',
-            type: 'info',
-            style: 'margin-right: 8px;',
-            onClick: () => handleView(row),
+            type: 'primary',
+            style: 'margin-right: 6px;',
+            onClick: () => handleEdit(row),
           },
           {
-            default: () => '详情',
-            icon: renderIcon('material-symbols:visibility-outline', { size: 16 }),
+            default: () => '编辑',
+            icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
           }
         ),
         h(
           NButton,
           {
             size: 'small',
-            type: 'warning',
-            style: 'margin-right: 8px;',
-            onClick: () => handleTriggerReview(row),
+            type: hasReview ? 'info' : 'warning',
+            style: 'margin-right: 6px;',
+            onClick: () => hasReview ? handleViewReview(row) : handleTriggerReview(row),
           },
           {
-            default: () => '审查',
-            icon: renderIcon('material-symbols:rate-review-outline', { size: 16 }),
+            default: () => hasReview ? '审查结果' : '审查',
+            icon: renderIcon(
+              hasReview ? 'material-symbols:description-outline' : 'material-symbols:rate-review-outline',
+              { size: 16 }
+            ),
           }
-        ),
-        h(
-          NButton,
-          {
-            size: 'small',
-            type: 'success',
-            style: 'margin-right: 8px;',
-            onClick: () => handleViewReview(row),
-          },
-          {
-            default: () => '审查结果',
-            icon: renderIcon('material-symbols:description-outline', { size: 16 }),
-          }
-        ),
-        withDirectives(
-          h(
-            NButton,
-            {
-              size: 'small',
-              type: 'primary',
-              style: 'margin-right: 8px;',
-              onClick: () => handleEdit(row),
-            },
-            {
-              default: () => '编辑',
-              icon: renderIcon('material-symbols:edit-outline', { size: 16 }),
-            }
-          ),
-          [[vPermission, 'put/api/v1/contract/update']]
         ),
         h(
           NPopconfirm,
           {
             onPositiveClick: () => handleDelete({ id: row.id }, false),
-            onNegativeClick: () => {},
           },
           {
             trigger: () =>
-              withDirectives(
-                h(
-                  NButton,
-                  { size: 'small', type: 'error' },
-                  {
-                    default: () => '删除',
-                    icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
-                  }
-                ),
-                [[vPermission, 'delete/api/v1/contract/delete']]
-              ),
+              h(NButton, { size: 'small', type: 'error' }, {
+                default: () => '删除',
+                icon: renderIcon('material-symbols:delete-outline', { size: 16 }),
+              }),
             default: () => h('div', {}, '确定删除该合同吗?'),
           }
         ),
@@ -371,11 +332,19 @@ const columns = [
 <template>
   <CommonPage show-footer title="合同管理">
     <template #action>
-      <NButton
-        v-permission="'get/api/v1/contract/list'"
-        type="primary"
-        @click="$table?.handleSearch()"
+      <NPopconfirm
+        v-if="checkedRowKeys.length > 0"
+        @positive-click="handleBatchDelete"
       >
+        <template #trigger>
+          <NButton type="error" :loading="batchDeleteLoading" style="margin-right: 12px">
+            <TheIcon icon="material-symbols:delete-outline" :size="18" class="mr-5" />
+            批量删除 ({{ checkedRowKeys.length }})
+          </NButton>
+        </template>
+        确定删除选中的 {{ checkedRowKeys.length }} 条合同吗？
+      </NPopconfirm>
+      <NButton type="primary" @click="$table?.handleSearch()">
         <TheIcon icon="material-symbols:refresh" :size="18" class="mr-5" />刷新
       </NButton>
     </template>
@@ -385,6 +354,7 @@ const columns = [
       v-model:query-items="queryItems"
       :columns="columns"
       :get-data="api.getContractList"
+      @on-checked="(keys) => (checkedRowKeys = keys)"
     >
       <template #queryBar>
         <QueryBarItem label="关键词" :label-width="50">
@@ -420,6 +390,7 @@ const columns = [
             clearable
             :options="contractTypeOptions"
             placeholder="请选择合同类型"
+            style="width: 200px"
           />
         </QueryBarItem>
       </template>
@@ -530,68 +501,5 @@ const columns = [
       </NForm>
     </CrudModal>
 
-    <!-- 审查结果弹窗 -->
-    <NModal v-model:show="reviewModalVisible" title="审查结果" style="width: 800px; max-height: 80vh;">
-      <NSpin :show="reviewLoading">
-        <div v-if="reviewResult" style="padding: 16px;">
-          <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 12px;">
-            <span>状态：</span>
-            <NTag :type="getReviewStatusType(reviewResult.status)" size="small">
-              {{ getReviewStatusText(reviewResult.status) }}
-            </NTag>
-            <template v-if="reviewResult.status === 'completed'">
-              <span v-if="reviewResult.risk_summary">
-                🔴{{ reviewResult.risk_summary.high || 0 }}
-                🟡{{ reviewResult.risk_summary.medium || 0 }}
-                🟢{{ reviewResult.risk_summary.low || 0 }}
-              </span>
-              <NButton
-                v-if="reviewResult.feishu_doc_url"
-                text
-                type="primary"
-                size="small"
-                @click="window.open(reviewResult.feishu_doc_url, '_blank')"
-              >
-                打开飞书文档
-              </NButton>
-            </template>
-          </div>
-          <div
-            v-if="reviewResult.status === 'completed' && reviewResult.report_content"
-            style="max-height: 50vh; overflow: auto; white-space: pre-wrap; background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 13px; line-height: 1.6;"
-          >
-            {{ reviewResult.report_content }}
-          </div>
-          <div v-else-if="reviewResult.status === 'failed'" style="color: #d03050;">
-            失败原因：{{ reviewResult.error_message || '未知错误' }}
-          </div>
-          <div v-else-if="reviewResult.status === 'pending' || reviewResult.status === 'analyzing'">
-            <p>审查任务正在处理中，请稍后再查看结果。</p>
-          </div>
-          <div v-else-if="reviewResult.status === 'none'">
-            <p>{{ reviewResult.error_message }}</p>
-          </div>
-          <div v-else-if="reviewResult.status === 'error'">
-            <p style="color: #d03050;">{{ reviewResult.error_message }}</p>
-          </div>
-          <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
-            <NPopconfirm @positive-click="handleDeleteReview">
-              <template #trigger>
-                <NButton
-                  v-if="reviewResult.id"
-                  size="small"
-                  type="error"
-                  :disabled="reviewResult.status === 'analyzing'"
-                >
-                  删除报告
-                </NButton>
-              </template>
-              确定删除该审查报告吗？
-            </NPopconfirm>
-            <NButton size="small" @click="reviewModalVisible = false">关闭</NButton>
-          </div>
-        </div>
-      </NSpin>
-    </NModal>
   </CommonPage>
 </template>

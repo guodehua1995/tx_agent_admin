@@ -35,11 +35,12 @@ async def review_contracts():
         pending_reports = await ContractRiskReport.filter(
             status="pending",
         ).order_by("created_at").limit(5)
-
+        
         if not pending_reports:
             return
 
-        logger.debug(f"[review_contracts] Found {len(pending_reports)} pending reports")
+        logger.info(f"[review_contracts] Found {len(pending_reports)} pending reports, "
+                    f"ids={[r.id for r in pending_reports]}")
 
         for report in pending_reports:
             try:
@@ -73,6 +74,10 @@ async def _process_review(report: ContractRiskReport):
         # 3. 获取条款目录树
         clause_tree = await contract_service.get_clause_tree(contract_id)
         if not clause_tree:
+            logger.warning(
+                f"[_process_review] No clauses: contract_id={contract_id}, "
+                f"clause_count={contract.clause_count}"
+            )
             await _mark_failed(report, "合同无条款数据")
             return
 

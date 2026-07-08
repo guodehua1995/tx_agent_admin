@@ -77,7 +77,10 @@ class SimilarContractArgs(BaseModel):
 
 class ContractClauseQueryArgs(BaseModel):
     contract_id: int = Field(..., description="合同ID")
-    keyword: str = Field(..., description="条款关键词（模糊搜索条款标题和原文）")
+    keyword: str = Field(
+        ...,
+        description="条款关键词，模糊搜索条款标题和原文。多个关键词用逗号分隔，如'违约责任,争议解决'"
+    )
 
 
 class ContractReviewTriggerArgs(BaseModel):
@@ -297,46 +300,67 @@ async def _query_contract_clause(
     contract_id: int,
     keyword: str,
 ) -> str:
-    """在指定合同内模糊搜索条款，返回匹配条款及其子条款原文"""
+    """在指定合同内模糊搜索条款，返回匹配条款及其子条款原文
+
+    多个关键词用逗号分隔，每个关键词最多返回2条结果。
+    """
     try:
         logger.debug(f"[_query_contract_clause] contract_id={contract_id}, keyword={keyword}")
 
-        # 模糊搜索：标题或原文包含关键词
-        clauses = await ContractClause.filter(
-            contract_id=contract_id,
-            is_deleted=False,
-        ).filter(
-            Q(clause_title__icontains=keyword) | Q(original_text__icontains=keyword),
-        ).order_by("clause_index").limit(10)
+        # 按逗号（中英文）拆分关键词
+        keywords = [kw.strip() for kw in keyword.replace("，", ",").split(",") if kw.strip()]
 
-        if not clauses:
-            logger.debug(f"[_query_contract_clause] No clauses found for keyword={keyword}")
-            return json.dumps({"message": f"未找到包含'{keyword}'的条款"}, ensure_ascii=False)
+        seen_ids = set()
+        all_results = []
 
-        results = []
-        for clause in clauses:
-            # 获取子条款
-            children = await ContractClause.filter(
+        for kw in keywords:
+            clauses = await ContractClause.filter(
                 contract_id=contract_id,
-                parent_id=clause.id,
                 is_deleted=False,
-            ).order_by("clause_index")
+            ).filter(
+                Q(clause_title__icontains=kw) | Q(original_text__icontains=kw),
+            ).order_by("clause_index").limit(10)
 
-            child_texts = [
-                f"{c.clause_title or ''}: {c.original_text[:300]}"
-                for c in children
-            ]
+            if not clauses:
+                continue
 
-            results.append({
-                "clause_index": clause.clause_index,
-                "clause_title": clause.clause_title,
-                "clause_level": clause.clause_level,
-                "original_text": clause.original_text[:500],
-                "children": child_texts if child_texts else None,
-            })
+            kw_results = []
+            for clause in clauses:
+                if clause.id in seen_ids:
+                    continue
+                seen_ids.add(clause.id)
 
-        logger.debug(f"[_query_contract_clause] Found {len(results)} matching clauses")
-        return json.dumps({"count": len(results), "clauses": results}, ensure_ascii=False)
+                children = await ContractClause.filter(
+                    contract_id=contract_id,
+                    parent_id=clause.id,
+                    is_deleted=False,
+                ).order_by("clause_index")
+
+                child_texts = [
+                    f"{c.clause_title or ''}: {c.original_text[:300]}"
+                    for c in children
+                ]
+
+                kw_results.append({
+                    "clause_index": clause.clause_index,
+                    "clause_title": clause.clause_title,
+                    "clause_level": clause.clause_level,
+                    "original_text": clause.original_text[:500],
+                    "children": child_texts if child_texts else None,
+                })
+
+                # 每个关键词只保留前2条
+                if len(kw_results) >= 2:
+                    break
+
+            all_results.extend(kw_results)
+
+        if not all_results:
+            logger.debug(f"[_query_contract_clause] No clauses found for keywords={keywords}")
+            return json.dumps({"message": f"未找到匹配条款"}, ensure_ascii=False)
+
+        logger.debug(f"[_query_contract_clause] Found {len(all_results)} matching clauses")
+        return json.dumps({"count": len(all_results), "clauses": all_results}, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[_query_contract_clause] Error: {e}", exc_info=True)
         return json.dumps({"error": f"查询异常: {str(e)}"}, ensure_ascii=False)
@@ -531,6 +555,7 @@ class ContractClauseQueryToolProvider(BaseToolProvider):
         "当审查某条款时，如果发现该条款引用了其他条款（如'按第七条执行'），"
         "必须调用此工具查询被引用条款的原文，确保交叉验证后再给出审查意见。"
         "查询不到时返回空列表，此时应在报告中标注引用缺失。"
+        "多个关键词必须用逗号','分隔，每个关键词最多返回2条结果。"
     )
 
     async def build_llamaindex_tools(self, **kwargs) -> list:

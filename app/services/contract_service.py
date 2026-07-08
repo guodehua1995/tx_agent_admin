@@ -10,7 +10,7 @@ from app.controllers.contract import (
     contract_controller,
     contract_type_controller,
 )
-from app.models.contract import Contract, ContractClause, ContractType
+from app.models.contract import Contract, ContractClause, ContractRiskReport, ContractType
 from app.models.quotation import Client
 from app.models.rag import Document
 
@@ -371,11 +371,24 @@ class ContractService:
         contract = await contract_controller.get(contract_id)
         contract.is_deleted = True
         await contract.save()
+
         # 同步软删条款
         await ContractClause.filter(
             contract_id=contract_id, is_deleted=False,
         ).exclude(summary_status="pending_delete").update(is_deleted=True)
-        logger.info("[Contract] Soft deleted: id=%s", contract_id)
+
+        # 级联清理关联文档及其所有关联数据（向量、切片、页面、截图）
+        if contract.document_id:
+            from app.services.document_service import cleanup_document
+            await cleanup_document(contract.document_id)
+            logger.info(f"Contract delete: cascaded document cleanup contract_id={contract_id} document_id={contract.document_id}")
+
+        # 清理审查报告
+        deleted_reports = await ContractRiskReport.filter(contract_id=contract_id).delete()
+        if deleted_reports:
+            logger.info(f"Contract delete: risk reports deleted contract_id={contract_id} count={deleted_reports}")
+
+        logger.info(f"Contract soft deleted: id={contract_id}")
 
     # ── 合同搜索 ──────────────────────────────────────────────────
 
@@ -409,6 +422,19 @@ class ContractService:
                 doc = await Document.filter(id=item.document_id).first()
                 d["document_url"] = _resolve_document_url(doc)
             result_items.append(d)
+
+        # 批量查询审查状态
+        if result_items:
+            contract_ids = [it["id"] for it in result_items]
+            reports = await ContractRiskReport.filter(
+                contract_id__in=contract_ids,
+            ).order_by("-created_at").all()
+            status_map = {}
+            for r in reports:
+                if r.contract_id not in status_map:
+                    status_map[r.contract_id] = r.status
+            for it in result_items:
+                it["review_status"] = status_map.get(it["id"])
 
         return {"total": total, "items": result_items}
 
@@ -649,22 +675,22 @@ class ContractService:
     # ── 合同审查 ──────────────────────────────────────────────────
 
     async def get_clause_tree(self, contract_id: int) -> list[dict]:
-        """获取合同一级条款树（含子条款），供审查定时任务使用"""
+        """获取合同根级条款树（含子条款），供审查定时任务使用"""
         logger.debug(f"[get_clause_tree] contract_id={contract_id}")
 
-        # 获取所有一级条款（clause_level=1）
-        level1_clauses = await ContractClause.filter(
+        # 获取所有根级条款（clause_level=0）
+        root_clauses = await ContractClause.filter(
             contract_id=contract_id,
-            clause_level=1,
+            clause_level=0,
             is_deleted=False,
         ).order_by("clause_index")
 
-        if not level1_clauses:
-            logger.debug(f"[get_clause_tree] No level-1 clauses found for contract_id={contract_id}")
+        if not root_clauses:
+            logger.debug(f"[get_clause_tree] No root clauses found for contract_id={contract_id}")
             return []
 
         tree = []
-        for clause in level1_clauses:
+        for clause in root_clauses:
             # 获取子条款
             children = await ContractClause.filter(
                 contract_id=contract_id,
@@ -690,7 +716,7 @@ class ContractService:
                 ],
             })
 
-        logger.debug(f"[get_clause_tree] Found {len(tree)} level-1 clauses")
+        logger.debug(f"[get_clause_tree] Found {len(tree)} root clauses")
         return tree
 
     async def create_temporary_contract(

@@ -68,7 +68,6 @@ export default {
   createAgent: (data = {}) => request.post('/agent/create', data),
   updateAgent: (data = {}) => request.post('/agent/update', data),
   deleteAgent: (params = {}) => request.delete('/agent/delete', { params }),
-  updateAgentKnowledgeBases: (data = {}) => request.post('/agent/update_knowledge_bases', data),
   agentChat: (data = {}) => request.post('/agent/chat', data),
   agentChatStream: (data = {}) =>
     request.post('/agent/chat/stream', data, {
@@ -187,6 +186,7 @@ export default {
   findSimilarContracts: (data = {}) => request.post('/contract/similar', data),
   // 合同统计
   getContractStats: () => request.get('/contract/stats'),
+  getContractStatsSql: () => request.get('/contract/stats/sql'),
   getExpiringContracts: (params = {}) => request.get('/contract/expiring', { params }),
   // 合同审查
   triggerContractReview: (params = {}) => request.post('/contract/review/trigger', null, { params }),

@@ -3,9 +3,10 @@ import logging
 from fastapi import APIRouter, Query
 from tortoise.expressions import Q
 
-from app.models.rag import LLMProviderConfig
+from app.models.rag import LLMProviderConfig, Document
 from app.controllers.knowledge_base import knowledge_base_controller
-from app.schemas.base import Success, SuccessExtra
+from app.services.document_service import cleanup_document
+from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.knowledge_bases import *
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,9 @@ async def delete_knowledge_base(kb_id: int = Query(..., description="知识库ID
     kb = await knowledge_base_controller.get(id=kb_id)
     kb.is_deleted = True
     await kb.save()
-    await Document.filter(knowledge_base_id=kb_id, is_deleted=False).update(is_deleted=True)
-    logger.info("[KnowledgeBase] Soft deleted: id=%s", kb_id)
+    # 级联清理每个文档的关联数据（向量、切片、页面、截图）并软删除文档
+    docs = await Document.filter(knowledge_base_id=kb_id, is_deleted=False).all()
+    for doc in docs:
+        await cleanup_document(doc.id)
+    logger.info(f"KnowledgeBase soft deleted: id={kb_id}, docs_cleaned={len(docs)}")
     return Success(msg="删除成功")

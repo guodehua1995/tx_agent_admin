@@ -11,6 +11,7 @@
       :data="tableData"
       :scroll-x="scrollX"
       :row-key="(row) => row[rowKey]"
+      :row-props="rowProps"
       :pagination="isPagination ? pagination : false"
       @update:checked-row-keys="onChecked"
       @update:page="onPageChange"
@@ -41,6 +42,10 @@ const props = defineProps({
   rowKey: {
     type: String,
     default: 'id',
+  },
+  rowProps: {
+    type: Function,
+    default: undefined,
   },
   columns: {
     type: Array,

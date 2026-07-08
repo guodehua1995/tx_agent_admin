@@ -13,8 +13,8 @@ from app.schemas.documents import (
     DocumentSubmitForReview,
     DocumentUpdate,
 )
-from app.services.chunk_service import chunk_service
 from app.services.document_pipeline import document_pipeline
+from app.services.document_service import cleanup_document
 from app.services.page_view import to_page_views
 
 logger = logging.getLogger(__name__)
@@ -90,13 +90,10 @@ async def update_document(doc_in: DocumentUpdate):
 
 @router.delete("/delete", summary="删除文档")
 async def delete_document(document_id: int = Query(..., description="文档ID")):
-    doc = await document_controller.get(id=document_id)
-    # 清理所有关联数据（向量、切片、页面）
-    await _cleanup_related_data(document_id)
-    # 软删除文档
-    doc.is_deleted = True
-    await doc.save()
-    logger.info("[Document] Soft deleted with vectors: id=%s", document_id)
+    await document_controller.get(id=document_id)
+    # 级联清理所有关联数据（向量、切片、页面）并软删除文档
+    await cleanup_document(document_id)
+    logger.info(f"Document deleted: id={document_id}")
     return Success(msg="删除成功")
 
 
@@ -129,56 +126,3 @@ async def list_document_type():
         for code in DocumentTypeCode
     ]
     return Success(data=data)
-
-
-# ========== 内部辅助 ==========
-
-
-async def _cleanup_doc_pages(document_id: int):
-    """删除文档关联的 DocumentPage 记录及截图文件
-
-    screenshot_url 字段语义为对象 key，直接交给后端删除；
-    另外以文档级前缀作一次兜底清理，防止漏文件。
-    """
-    from app.models.rag import DocumentPage
-    from app.services.extraction.base import BaseExtractor
-    from app.services.file_storage import file_storage
-
-    pages = await DocumentPage.filter(document_id=document_id).all()
-    for page in pages:
-        if page.screenshot_url:
-            try:
-                await file_storage.delete(page.screenshot_url)
-            except Exception as e:
-                logger.warning(
-                    "[Document] Delete page screenshot failed: doc_id=%s, key=%s, err=%s",
-                    document_id, page.screenshot_url, e,
-                )
-
-    # 前缀兜底清理（针对 TOS 可以一次性除掉漏文件；本地后端为 rmtree）
-    try:
-        await file_storage.delete_prefix(BaseExtractor.doc_screenshot_prefix(document_id))
-    except Exception as e:
-        logger.warning(
-            "[Document] Delete page prefix failed: doc_id=%s, err=%s", document_id, e,
-        )
-
-    deleted_count = await DocumentPage.filter(document_id=document_id).delete()
-    if deleted_count:
-        logger.info("[Document] Cleaned up %d page records for doc_id=%s", deleted_count, document_id)
-
-
-async def _cleanup_related_data(document_id: int):
-    """清理文档的所有关联数据：向量、切片结果、页面记录"""
-    from app.models.rag import SlicingResult
-
-    # 1. 清理向量数据
-    await chunk_service.delete_by_doc_id(document_id)
-
-    # 2. 清理切片结果
-    deleted_slicing = await SlicingResult.filter(document_id=document_id).delete()
-    if deleted_slicing:
-        logger.info("[Document] Cleaned up %d slicing records for doc_id=%s", deleted_slicing, document_id)
-
-    # 3. 清理页面记录及截图
-    await _cleanup_doc_pages(document_id)

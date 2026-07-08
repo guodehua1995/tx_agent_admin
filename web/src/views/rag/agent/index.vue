@@ -7,9 +7,7 @@ import {
   NForm,
   NFormItem,
   NInput,
-  NInputNumber,
   NPopconfirm,
-  NSelect,
   NSpace,
   NSpin,
   NSwitch,
@@ -41,10 +39,6 @@ const $table = ref(null)
 const queryItems = ref({})
 const vPermission = resolveDirective('permission')
 
-const chatModelOptions = ref([])
-const kbOptions = ref([])
-const docTemplateOptions = ref([])
-
 const {
   modalVisible,
   modalAction,
@@ -59,10 +53,8 @@ const {
 } = useCRUD({
   name: 'Agent',
   initForm: {
-    max_history_turns: 10,
     is_active: true,
-    knowledge_base_ids: [],
-    doc_template_ids: [],
+    code: '',
   },
   doCreate: api.createAgent,
   doDelete: api.deleteAgent,
@@ -71,15 +63,7 @@ const {
 })
 
 function handleEdit(row) {
-  const formData = { ...row }
-  // Map M2M fields to id arrays
-  if (row.doc_templates) {
-    formData.doc_template_ids = row.doc_templates.map((t) => t.id)
-  }
-  if (row.knowledge_bases) {
-    formData.knowledge_base_ids = row.knowledge_bases.map((kb) => kb.id)
-  }
-  _handleEdit(formData)
+  _handleEdit({ ...row })
 }
 
 // Chat drawer state
@@ -91,27 +75,6 @@ const chatMessages = ref([])
 const chatLoading = ref(false)
 const chatStreaming = ref(false) // 流式输出中
 const currentStreamContent = ref('') // 当前流式内容
-
-async function loadOptions() {
-  const [modelRes, kbRes, tplRes] = await Promise.all([
-    api.getAiConfigList({ is_embedding: false, page: 1, page_size: 9999 }),
-    api.getKnowledgeBaseList({ page: 1, page_size: 9999 }),
-    api.getDocTemplateOptions(),
-  ])
-  chatModelOptions.value = (modelRes.data || []).map((item) => ({
-    label: item.name,
-    value: item.id,
-  }))
-  kbOptions.value = (kbRes.data || []).map((item) => ({ label: item.name, value: item.id }))
-  docTemplateOptions.value = (tplRes.data || []).map((item) => ({
-    label: item.name,
-    value: item.id,
-  }))
-}
-
-function getChatModelName(id) {
-  return chatModelOptions.value.find((o) => o.value === id)?.label || id
-}
 
 function openChatDrawer(row) {
   chatAgentId.value = row.id
@@ -206,7 +169,6 @@ async function sendMessage() {
 }
 
 onMounted(() => {
-  loadOptions()
   $table.value?.handleSearch()
 })
 
@@ -226,19 +188,11 @@ const columns = [
     ellipsis: { tooltip: true },
   },
   {
-    title: '对话模型',
-    key: 'chat_model_id',
+    title: '路由标识',
+    key: 'code',
     width: 120,
     align: 'center',
-    render(row) {
-      return h('span', getChatModelName(row.chat_model_id))
-    },
-  },
-  {
-    title: '历史轮数',
-    key: 'max_history_turns',
-    width: 80,
-    align: 'center',
+    ellipsis: { tooltip: true },
   },
   {
     title: '状态',
@@ -374,52 +328,11 @@ const columns = [
           <NInput v-model:value="modalForm.description" type="textarea" placeholder="请输入描述" />
         </NFormItem>
         <NFormItem
-          label="对话模型"
-          path="chat_model_id"
-          :rule="{
-            required: true,
-            type: 'number',
-            message: '请选择对话模型',
-            trigger: ['change', 'blur'],
-          }"
+          label="路由标识"
+          path="code"
+          :rule="{ required: true, message: '请输入路由标识(code)', trigger: ['input', 'blur'] }"
         >
-          <NSelect
-            v-model:value="modalForm.chat_model_id"
-            :options="chatModelOptions"
-            placeholder="请选择对话模型"
-          />
-        </NFormItem>
-        <NFormItem label="系统提示词" path="system_prompt">
-          <NInput
-            v-model:value="modalForm.system_prompt"
-            type="textarea"
-            placeholder="请输入系统提示词"
-            :rows="4"
-          />
-        </NFormItem>
-        <NFormItem label="历史轮数" path="max_history_turns">
-          <NInputNumber
-            v-model:value="modalForm.max_history_turns"
-            :min="0"
-            :max="50"
-            style="width: 100%"
-          />
-        </NFormItem>
-        <NFormItem label="关联知识库" path="knowledge_base_ids">
-          <NSelect
-            v-model:value="modalForm.knowledge_base_ids"
-            multiple
-            :options="kbOptions"
-            placeholder="请选择关联知识库"
-          />
-        </NFormItem>
-        <NFormItem label="绑定模板" path="doc_template_ids">
-          <NSelect
-            v-model:value="modalForm.doc_template_ids"
-            multiple
-            :options="docTemplateOptions"
-            placeholder="请选择绑定文档模板"
-          />
+          <NInput v-model:value="modalForm.code" placeholder="对应 AgentRegistry 中的 name，如 contract" />
         </NFormItem>
         <NFormItem label="启用" path="is_active">
           <NSwitch v-model:value="modalForm.is_active" />

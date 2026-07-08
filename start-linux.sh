@@ -37,7 +37,7 @@ check_env_file() {
 check_venv() {
   if [ ! -f "$VENV_DIR/bin/activate" ]; then
     echo "[ERROR] 虚拟环境不存在: $VENV_DIR"
-    echo "[HINT]  python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+    echo "[HINT]  python3 -m venv .venv && source .venv/bin/activate && uv pip install -r requirements.txt"
     exit 1
   fi
 }
@@ -72,9 +72,17 @@ ensure_deps() {
   fi
 
   echo "[INFO] 检测到依赖变更 / 首次启动，开始安装 Python 依赖..."
+
+  # 确保 uv 可用（避免 pip 镜像滞后导致缺包）
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "[INFO] 安装 uv..."
+    pip install uv -i https://pypi.org/simple/ 2>/dev/null || pip install uv 2>/dev/null || true
+  fi
+
   if command -v uv >/dev/null 2>&1; then
     uv pip install -r "$req_file" --python "$VENV_DIR/bin/python"
   else
+    echo "[WARN] uv 不可用，降级到 pip（可能因镜像滞后导致安装失败）"
     "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null 2>&1 || true
     "$VENV_DIR/bin/pip" install -r "$req_file"
   fi

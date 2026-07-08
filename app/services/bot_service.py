@@ -73,7 +73,7 @@ class BotService:
         except KeyError:
             return {"answer": f"Agent '{agent.code}' 未注册，请检查 agents/ 目录", "sources": []}
 
-        logger.debug("bot routed to agent: code=%s", agent.code)
+        logger.debug(f"bot routed to agent: code={agent.code}")
 
         # 3. feishu_open_id → user（不存在则自动创建）
         user = await User.filter(feishu_open_id=feishu_open_id).first()

@@ -93,14 +93,13 @@ class ContractAgent(BaseAgent):
         history = input_data.get("history", [])
 
         logger.debug(
-            "[ContractAgent] question=%s, history_turns=%d",
-            question[:50], len(history),
+            f"[ContractAgent] question={question[:50]}, history_turns={len(history)}"
         )
 
         try:
             # 构建合同工具
             contract_tools = await self._build_contract_tools()
-            logger.debug("[ContractAgent] tools count=%d", len(contract_tools))
+            logger.debug(f"[ContractAgent] tools count={len(contract_tools)}")
 
             # 构建历史消息
             messages = []
@@ -139,8 +138,7 @@ class ContractAgent(BaseAgent):
                         })
 
             logger.debug(
-                "[ContractAgent] Done: answer_len=%d, tool_calls=%d",
-                len(final_output), len(tool_calls),
+                f"[ContractAgent] Done: answer_len={len(final_output)}, tool_calls={len(tool_calls)}"
             )
 
             return {
@@ -151,8 +149,7 @@ class ContractAgent(BaseAgent):
 
         except Exception as e:
             logger.error(
-                "[ContractAgent] Failed: question=%s, error=%s",
-                question[:50], e, exc_info=True,
+                f"[ContractAgent] Failed: question={question[:50]}, error={e}"
             )
             return {
                 "answer": f"抱歉，处理您的问题时出现错误：{e}",

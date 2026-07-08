@@ -162,6 +162,38 @@ async def init_menus():
         ]
         await Menu.bulk_create(children_menu)
 
+        # --- 合同管理 ---
+        contract_menu = await Menu.create(
+            menu_type=MenuType.CATALOG,
+            name="合同管理",
+            path="/contract",
+            order=2,
+            parent_id=0,
+            icon="carbon:document-signed",
+            is_hidden=False,
+            component="Layout",
+            keepalive=False,
+            redirect="/contract/list",
+        )
+        await Menu.bulk_create([
+            Menu(
+                menu_type=MenuType.MENU, name="合同列表", path="list", order=1,
+                parent_id=contract_menu.id, icon="carbon:list", is_hidden=False,
+                component="/contract/index", keepalive=False,
+            ),
+            Menu(
+                menu_type=MenuType.MENU, name="合同类型", path="type", order=2,
+                parent_id=contract_menu.id, icon="carbon:category", is_hidden=False,
+                component="/contract/type", keepalive=False,
+            ),
+            # 隐藏子页面：合同详情
+            Menu(
+                menu_type=MenuType.MENU, name="合同详情", path="detail", order=10,
+                parent_id=contract_menu.id, icon="carbon:document", is_hidden=True,
+                component="/contract/detail", keepalive=False,
+            ),
+        ])
+
         # --- 知识管理 ---
         knowledge_menu = await Menu.create(
             menu_type=MenuType.CATALOG,
@@ -288,9 +320,7 @@ async def init_menus():
 
 
 async def init_apis():
-    apis = await api_controller.model.exists()
-    if not apis:
-        await api_controller.refresh_api()
+    await api_controller.refresh_api()
 
 
 async def init_db():

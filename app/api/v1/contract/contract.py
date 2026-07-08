@@ -292,7 +292,14 @@ async def trigger_contract_review(
     focus_areas: str = Query(None, description="分析维度，如'法律合规,商业风险'"),
 ):
     """创建审查记录并加入队列，定时任务会异步执行审查"""
-    from app.models.contract import ContractRiskReport
+    from app.models.contract import Contract, ContractRiskReport
+
+    # 校验合同存在且有条款
+    contract = await Contract.filter(id=contract_id, is_deleted=False).first()
+    if not contract:
+        return Fail(msg="合同不存在或已删除")
+    if not contract.clause_count:
+        return Fail(msg="合同暂无条款数据，请先完成文档解析入库")
 
     # 检查是否已有审查记录
     existing = await ContractRiskReport.filter(
