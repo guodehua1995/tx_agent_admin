@@ -38,15 +38,15 @@ def make_middlewares():
             expose_headers=settings.CORS_EXPOSE_HEADERS,
         ),
         Middleware(BackGroundTaskMiddleware),
-        Middleware(
-            HttpAuditLogMiddleware,
-            methods=["GET", "POST", "PUT", "DELETE"],
-            exclude_paths=[
-                "/api/v1/base/access_token",
-                "/docs",
-                "/openapi.json",
-            ],
-        ),
+        # Middleware(
+        #     HttpAuditLogMiddleware,
+        #     methods=["GET", "POST", "PUT", "DELETE"],
+        #     exclude_paths=[
+        #         "/api/v1/base/access_token",
+        #         "/docs",
+        #         "/openapi.json",
+        #     ],
+        # ),
     ]
     return middleware
 

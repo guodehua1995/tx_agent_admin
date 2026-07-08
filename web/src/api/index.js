@@ -47,7 +47,7 @@ export default {
   deleteAiConfig: (params = {}) => request.delete('/ai_config/delete', { params }),
   testAiConfig: (params = {}) => request.post('/ai_config/test', null, { params }),
   // Knowledge Base
-  getKnowledgeBaseList: (params = {}) => request.get('/knowledge_base/list', { params }),
+  getKnowledgeBaseList: (params = {}) => request.get('/knowledge_base/list', { params, timeout: 60000 }),
   getKnowledgeBase: (params = {}) => request.get('/knowledge_base/get', { params }),
   createKnowledgeBase: (data = {}) => request.post('/knowledge_base/create', data),
   updateKnowledgeBase: (data = {}) => request.post('/knowledge_base/update', data),
@@ -55,7 +55,7 @@ export default {
   // Document Type (仅提供列表接口，供上传文档时选择)
   getDocumentTypeList: () => request.get('/document/type/list'),
   // Document
-  getDocumentList: (params = {}) => request.get('/document/list', { params }),
+  getDocumentList: (params = {}) => request.get('/document/list', { params, timeout: 60000 }),
   getDocument: (params = {}) => request.get('/document/get', { params }),
   createDocument: (data = {}) => request.post('/document/create', data),
   updateDocument: (data = {}) => request.post('/document/update', data),

@@ -54,8 +54,8 @@ class RAGService:
                 "max_overflow": 10,          # 超出 pool_size 时允许临时连接
             },
         )
-        logger.info(f"PGVectorStore initialized: table={settings.VECTOR_STORE_TABLE_NAME}")
-
+        logger.info(f"PGVectorStore initialized: table={settings.VECTOR_STORE_TABLE_NAME},dim={settings.DEFAULT_EMBEDDING_DIMENSION}")
+            
     def _build_node_parser(self, kb: KnowledgeBase):
         """根据知识库的 chunk_mode 配置构建对应的 NodeParser"""
         from llama_index.core.node_parser import (

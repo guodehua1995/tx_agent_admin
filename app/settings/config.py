@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     GOTENBERG_URL: str = "http://localhost:3001"
 
     # 文件存储
-    FILE_STORAGE_BACKEND: str = "tos"  # local | tos
+    FILE_STORAGE_BACKEND: str = "local"  # local | tos
     MEDIA_ROOT: str = os.path.join(BASE_DIR, "media")
     MEDIA_URL_PREFIX: str = "/media"
 

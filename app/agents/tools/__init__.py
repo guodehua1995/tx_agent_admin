@@ -151,7 +151,6 @@ async def build_chat_tools(
         ContractSearchToolProvider(),
         ContractStatsToolProvider(),
         ContractClauseSearchToolProvider(),
-        ContractSummarySearchToolProvider(),
         CompareClauseSummariesToolProvider(),
         CompareClauseFulltextToolProvider(),
         FindSimilarContractsToolProvider(),

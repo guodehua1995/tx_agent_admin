@@ -1,4 +1,4 @@
-import logging
+from app.log import logger
 
 from fastapi import APIRouter, BackgroundTasks, Query
 from tortoise.expressions import Q
@@ -6,7 +6,7 @@ from tortoise.expressions import Q
 from app.controllers.document import document_controller
 from app.core.ctx import CTX_USER_ID
 from app.models.enums import DocumentTypeCode, DocumentStatus
-from app.models.rag import KnowledgeBase
+from app.models.rag import Document, KnowledgeBase
 from app.schemas.base import Fail, Success, SuccessExtra
 from app.schemas.documents import (
     DocumentCreate,
@@ -16,8 +16,6 @@ from app.schemas.documents import (
 from app.services.document_pipeline import document_pipeline
 from app.services.document_service import cleanup_document
 from app.services.page_view import to_page_views
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -35,6 +33,7 @@ async def list_document(
     knowledge_base_id: int = Query(None, description="知识库ID"),
     source_type: str = Query("", description="来源类型"),
 ):
+   
     q = Q(is_deleted=False)
     if title:
         q &= Q(title__contains=title)
@@ -46,7 +45,13 @@ async def list_document(
         q &= Q(knowledge_base_id=knowledge_base_id)
     if source_type:
         q &= Q(source_type=source_type)
-    total, objs = await document_controller.list(page=page, page_size=page_size, search=q, order=["-created_at"])
+    query = Document.filter(q).exclude(content="").order_by("-created_at")
+    total = await query.count()
+    objs = await query.offset((page - 1) * page_size).limit(page_size).only(
+        "id", "title", "source_type", "source_meta", "doc_type_code",
+        "status", "knowledge_base_id", "uploader_id", "error_message",
+        "is_deleted", "created_at", "updated_at", "summary"
+    )
     data = [await obj.to_dict(exclude_fields=["content"]) for obj in objs]
     return SuccessExtra(data=data, total=total, page=page, page_size=page_size)
 

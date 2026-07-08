@@ -28,6 +28,7 @@ from app.services.feishu_service import feishu_service
 from app.services.rag_service import rag_service
 from app.services.slicing import SLICING_HANDLERS, run_slicing
 from app.settings import settings
+from app.models.rag import DocumentSourceType
 
 from app.log import logger
 

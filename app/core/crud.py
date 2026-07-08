@@ -1,5 +1,5 @@
 from typing import Any, Dict, Generic, List, NewType, Tuple, Type, TypeVar, Union
-
+from app.log import logger
 from pydantic import BaseModel
 from tortoise.expressions import Q
 from tortoise.models import Model
@@ -18,8 +18,14 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         return await self.model.get(id=id)
 
     async def list(self, page: int, page_size: int, search: Q = Q(), order: list = []) -> Tuple[Total, List[ModelType]]:
+        logger.info(f"[CRUD] list {self.model.__name__} START page={page}, page_size={page_size}")
         query = self.model.filter(search)
-        return await query.count(), await query.offset((page - 1) * page_size).limit(page_size).order_by(*order)
+        logger.info(f"[CRUD] {self.model.__name__} running count()...")
+        count = await query.count()
+        logger.info(f"[CRUD] {self.model.__name__} count() done: {count}")
+        items = await query.offset((page - 1) * page_size).limit(page_size).order_by(*order)
+        logger.info(f"[CRUD] {self.model.__name__} query done: {len(items)} items")
+        return count, items
 
     async def create(self, obj_in: CreateSchemaType) -> ModelType:
         if isinstance(obj_in, Dict):

@@ -172,16 +172,19 @@ async def list_folder_files(
     )
     data = [await obj.to_dict() for obj in objs]
 
-    # 批量查询关联 Document 的处理状态
+    # 批量查询关联 Document 的处理状态和标题（用于兜底 file_name）
     doc_ids = [obj.document_id for obj in objs if obj.document_id]
     if doc_ids:
-        docs = await Document.filter(id__in=doc_ids).values("id", "status", "error_message")
+        docs = await Document.filter(id__in=doc_ids).values("id", "status", "error_message", "title")
         doc_map = {d["id"]: d for d in docs}
         for item in data:
             did = item.get("document_id")
             if did and did in doc_map:
                 item["doc_status"] = doc_map[did]["status"]
                 item["doc_error_message"] = doc_map[did]["error_message"]
+                # 兜底：如果 file_name 为空，使用 Document.title
+                if not item.get("file_name"):
+                    item["file_name"] = doc_map[did].get("title", "")
             else:
                 item["doc_status"] = None
                 item["doc_error_message"] = None

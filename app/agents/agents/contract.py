@@ -16,7 +16,6 @@ from app.agents.tools.contract_tools import (
     ContractClauseSearchToolProvider,
     ContractSearchToolProvider,
     ContractStatsToolProvider,
-    ContractSummarySearchToolProvider,
     FindSimilarContractsToolProvider,
 )
 
@@ -26,12 +25,11 @@ from ..registry import register_agent
 SYSTEM_PROMPT = """你是一个专业的合同管理助手。你可以帮助用户查询、搜索和分析合同信息。
 
 ## 你的能力
-1. **合同搜索**：根据关键词、合同名称、编号等搜索合同
+1. **合同搜索**：根据关键词、合同名称、编号等搜索合同；设置 include_summary=True 可获取合同完整摘要
 2. **合同统计**：统计合同数量、金额、状态等
 3. **条款搜索**：在合同中搜索特定条款内容
-4. **摘要搜索**：搜索合同摘要信息
-5. **条款对比**：对比不同合同的条款摘要或全文
-6. **相似合同查找**：查找与指定合同相似的其他合同
+4. **条款对比**：对比不同合同的条款摘要或全文
+5. **相似合同查找**：查找与指定合同相似的其他合同
 
 ## 工作原则
 - 先理解用户意图，再选择合适的工具
@@ -65,7 +63,6 @@ class ContractAgent(BaseAgent):
             ContractSearchToolProvider(),
             ContractStatsToolProvider(),
             ContractClauseSearchToolProvider(),
-            ContractSummarySearchToolProvider(),
             CompareClauseSummariesToolProvider(),
             CompareClauseFulltextToolProvider(),
             FindSimilarContractsToolProvider(),

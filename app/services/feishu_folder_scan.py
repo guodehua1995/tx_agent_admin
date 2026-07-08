@@ -10,6 +10,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from tortoise.expressions import Q
+
 from app.core.redis import get_redis
 from app.core.redis_lock import LockKey, RedisLock
 from app.log import logger
@@ -123,6 +125,13 @@ class FeishuFolderScanService:
             logger.info(
                 f"[FeishuFolderScan] watch_id={watch.id} fetched {len(files)} files"
             )
+            # 调试：打印前3个文件的原始数据，确认飞书 API 返回的字段
+            if files:
+                for i, f in enumerate(files[:3]):
+                    logger.debug(
+                        f"[FeishuFolderScan] file[{i}] keys={list(f.keys())}, "
+                        f"name={f.get('name')}, token={f.get('token')}, type={f.get('type')}"
+                    )
 
             new_files, updated_files = await self._diff_new_and_updated(watch, files)
             deleted_count = await self._detect_deleted_files(watch, files)
@@ -571,3 +580,32 @@ class FeishuFolderScanService:
 
 
 feishu_folder_scan_service = FeishuFolderScanService()
+
+
+async def fix_empty_file_names() -> int:
+    """修复 file_name 为空的 FeishuFolderFile 记录：从关联 Document.title 回填。
+
+    可手动调用：python -c "import asyncio; from app.services.feishu_folder_scan import fix_empty_file_names; print(asyncio.run(fix_empty_file_names()))"
+    """
+    records = await FeishuFolderFile.filter(
+        Q(file_name="") | Q(file_name__isnull=True),
+        document_id__isnull=False,
+    )
+    if not records:
+        logger.info("[FixFileNames] No records with empty file_name found")
+        return 0
+
+    doc_ids = [r.document_id for r in records]
+    docs = await Document.filter(id__in=doc_ids).values("id", "title")
+    doc_map = {d["id"]: d["title"] for d in docs}
+
+    fixed = 0
+    for record in records:
+        title = doc_map.get(record.document_id)
+        if title:
+            record.file_name = title
+            await record.save()
+            fixed += 1
+
+    logger.info(f"[FixFileNames] Fixed {fixed}/{len(records)} records")
+    return fixed

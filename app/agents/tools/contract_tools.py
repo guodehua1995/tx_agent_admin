@@ -37,6 +37,7 @@ class ContractSearchArgs(BaseModel):
     party_a: Optional[str] = Field(None, description="甲方名称")
     party_b: Optional[str] = Field(None, description="乙方名称")
     contract_type: Optional[str] = Field(None, description="合同类型名称")
+    include_summary: bool = Field(False, description="是否返回合同完整摘要(500字)，默认False仅返回简要信息")
     limit: int = Field(10, description="返回条数上限")
 
 
@@ -96,6 +97,7 @@ async def _contract_search(
     party_a: Optional[str] = None,
     party_b: Optional[str] = None,
     contract_type: Optional[str] = None,
+    include_summary: bool = False,
     limit: int = 10,
 ) -> str:
     """结构化搜索合同"""
@@ -111,23 +113,28 @@ async def _contract_search(
         if not items:
             return json.dumps({"message": "未找到匹配的合同"}, ensure_ascii=False)
 
+        contracts = []
+        for c in items:
+            item = {
+                "id": c["id"],
+                "project_name": c.get("project_name"),
+                "party_a": c.get("party_a_name"),
+                "party_b": c.get("party_b_name"),
+                "type": c.get("contract_type_name"),
+                "signing_date": str(c.get("signing_date", ""))[:10] if c.get("signing_date") else None,
+                "expiry_date": str(c.get("expiry_date", ""))[:10] if c.get("expiry_date") else None,
+                "clause_count": c.get("clause_count"),
+                "url": c.get("document_url"),
+            }
+            if include_summary:
+                item["summary"] = c.get("summary", "")[:500] if c.get("summary") else ""
+            else:
+                item["summary"] = c.get("summary", "")[:200] if c.get("summary") else ""
+            contracts.append(item)
+
         return json.dumps({
             "total": result["total"],
-            "contracts": [
-                {
-                    "id": c["id"],
-                    "project_name": c.get("project_name"),
-                    "party_a": c.get("party_a_name"),
-                    "party_b": c.get("party_b_name"),
-                    "type": c.get("contract_type_name"),
-                    "summary": c.get("summary", "")[:200] if c.get("summary") else "",
-                    "signing_date": str(c.get("signing_date", ""))[:10] if c.get("signing_date") else None,
-                    "expiry_date": str(c.get("expiry_date", ""))[:10] if c.get("expiry_date") else None,
-                    "clause_count": c.get("clause_count"),
-                    "url": c.get("document_url"),
-                }
-                for c in items
-            ],
+            "contracts": contracts,
         }, ensure_ascii=False)
     except Exception as e:
         logger.error("[ContractSearchTool] Error: %s", e, exc_info=True)
@@ -443,6 +450,7 @@ class ContractSearchToolProvider(BaseToolProvider):
     TOOL_DESC = (
         "结构化搜索合同。输入关键词(合同名称/项目名)、甲方名称、乙方名称、合同类型等条件，"
         "返回匹配的合同列表。当用户询问'XX公司的合同'、'XX项目的合同'、'XX类型的合同有哪些'时使用此工具。"
+        "设置 include_summary=True 可返回合同完整摘要(500字)，适合用户询问'XX合同主要约定什么'等场景。"
     )
 
     async def build_llamaindex_tools(self, **kwargs) -> list:
