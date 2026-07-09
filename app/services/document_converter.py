@@ -122,8 +122,11 @@ PPT页面通常包含标题、要点、图表、示意图、流程图等视觉�
 
 
 # Vision LLM 调用默认参数
-_VISION_LLM_TIMEOUT = 180  # 多模态单次调用超时（秒），图片理解较慢
+_VISION_LLM_TIMEOUT = 600  # 多模态单次调用超时（秒），复杂页面可能需要较长时间
 _VISION_LLM_MAX_RETRIES = 2  # 额外重试次数
+
+# 全局信号量：限制 Vision LLM 并发数为 1，避免占用过多 QPS 额度
+_vision_llm_semaphore = asyncio.Semaphore(1)
 
 
 async def _call_vision_llm(
@@ -201,33 +204,34 @@ async def _call_vision_llm(
 
     last_err: BaseException | None = None
     total_attempts = max_retries + 1
-    for attempt in range(1, total_attempts + 1):
-        try:
-            result = await asyncio.wait_for(_stream_collect(), timeout=timeout)
-            if not result:
-                raise ConversionError("Vision LLM 返回空内容")
-            return result
-        except asyncio.TimeoutError as e:
-            last_err = e
-            err_repr = f"timeout({timeout}s)"
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            err_repr = repr(e)
+    async with _vision_llm_semaphore:
+        for attempt in range(1, total_attempts + 1):
+            try:
+                result = await asyncio.wait_for(_stream_collect(), timeout=timeout)
+                if not result:
+                    raise ConversionError("Vision LLM 返回空内容")
+                return result
+            except asyncio.TimeoutError as e:
+                last_err = e
+                err_repr = f"timeout({timeout}s)"
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                err_repr = repr(e)
 
-        if attempt < total_attempts:
-            backoff = min(2 ** (attempt - 1), 10)
-            logger.warning(
-                f"[VisionLLM] page {page_num} call failed (attempt {attempt}/{total_attempts}, {err_repr}), retry in {backoff}ds"
-            )
-            await asyncio.sleep(backoff)
-        else:
-            logger.error(
-                f"[VisionLLM] page {page_num} call exhausted retries ({total_attempts} attempts), last error: {err_repr}"
-            )
+            if attempt < total_attempts:
+                backoff = min(2 ** (attempt - 1), 10)
+                logger.warning(
+                    f"[VisionLLM] page {page_num} call failed (attempt {attempt}/{total_attempts}, {err_repr}), retry in {backoff}ds"
+                )
+                await asyncio.sleep(backoff)
+            else:
+                logger.error(
+                    f"[VisionLLM] page {page_num} call exhausted retries ({total_attempts} attempts), last error: {err_repr}"
+                )
 
-    raise ConversionError(
-        f"Vision LLM 调用失败 (page {page_num}, {total_attempts} attempts): {last_err}"
-    )
+        raise ConversionError(
+            f"Vision LLM 调用失败 (page {page_num}, {total_attempts} attempts): {last_err}"
+        )
 
 
 # ============================================================
