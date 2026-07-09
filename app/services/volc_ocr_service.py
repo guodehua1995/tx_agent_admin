@@ -58,7 +58,7 @@ def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[tuple[bytes, int]
 
     Returns:
         子 PDF (字节, 页数) 元组列表。
-        单页超限的批次标记为 page_count=0，表示需要 VisionLLM fallback。
+        单页超限的批次标记为 page_count=0，表示需要压缩后重试 OCR。
     """
     import fitz  # PyMuPDF
 
@@ -93,12 +93,12 @@ def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[tuple[bytes, int]
             result.append((batch_bytes, page_count))
         else:
             if page_count <= 1:
-                # 单页仍超限，标记 page_count=0 表示需要 VisionLLM fallback
+                # 单页仍超限，标记 page_count=0 表示需要压缩后重试 OCR
                 logger.warning(
                     f"[VolcOCR] 单页 base64={b64_size / 1024 / 1024:.2f}MB "
-                    f"超限 (page {start + 1})，将使用 VisionLLM fallback"
+                    f"超限 (page {start + 1})，将压缩后重试 OCR"
                 )
-                result.append((batch_bytes, 0))  # page_count=0 → VisionLLM fallback
+                result.append((batch_bytes, 0))  # page_count=0 → 压缩后重试 OCR
             else:
                 # 递归拆分：页数减半
                 half = max(1, page_count // 2)
