@@ -103,16 +103,16 @@ META_EXTRACT_PROMPT = """你是合同解析助手。仅从以下合同的首部�
 STRUCTURE_PROMPT = """你是合同解析助手。分析以下合同片段，按顺序识别每个独立条款的起始位置。
 
 返回 JSON（不要包裹代码块，不要任何额外说明）：
-{"clause_markers": [{"title": "条款主题", "marker": "原文中该条款的起始 20~40 字原文"}]}
+{"clause_markers": [{"title": "条款主题", "level": 数字, "marker": "原文中该条款的起始 20~40 字原文"}]}
 
 # 上一窗口末尾条款（跨页上下文）
 {last_top_clause}
 
-如果当前片段中的条款属于上述条款的延续内容（同一主条款继续到新页面），请在 title 中体现继承关系，按层级拼接完整 title。
-例如：上一窗口最后条款为"合作范围-服务内容-软件开发"，本片段继续列出软件开发下的子项，title 仍应包含"合作范围-服务内容-软件开发"前缀。
+如果当前片段中的条款属于上述条款的延续内容（同一主条款继续到新页面），请正确设置 level（比上一窗口末尾条款的 level 更深一级）。
+例如：上一窗口最后条款为"合作范围-服务内容-软件开发"（level 2），本片段继续列出软件开发下的子项，则子项 level 应为 3。
 
 # 切分颗粒度要求（重要）
-marker 应放在**含有具体内容的最低条款层级**的起始位置，避免过粗（一整个章节作为一个 marker）也避免过碎（每行子项都加 marker）。
+marker 应放在**每个有独立编号/标题的条款层级**的起始位置，构建完整的条款树结构。
 
 ## 硬规则（优先级高于下述软规则）
 {markdown_anchor_section}
@@ -120,9 +120,9 @@ marker 应放在**含有具体内容的最低条款层级**的起始位置，避
 
 ## 软规则
 - 若文档不含 Markdown 标题（# / ## / ###…），按原文中的数字编号判断：
-  - 条款无子项（如"1. 合作期限：本合同期限为 2 年。"），在该条起始位置打一个 marker；
-  - 条款有多层数字编号嵌套结构（如 2.1 / 2.1.1 / 2.1.1.1），仅在**含具体内容的最低层级**的起始位置打 marker；
-  - 更高层级的纯嵌套结构不独立打 marker，更低层级的枚举/字母列表 a/b/c、(i)/(ii) 也不独立打 marker。
+  - 每个有独立编号的条款层级（如 1. / 2.1 / 2.1.1）都应在该层级起始位置打一个 marker；
+  - 更低层级的枚举/字母列表 a/b/c、(i)/(ii) 不独立打 marker；
+  - 若某层级标题下仅有子标题而无正文内容，仍应打 marker（作为结构节点）。
 - 「软规则」与「硬规则」冲突时，**以硬规则为准**。
 
 ## 示例 1：多层数字编号嵌套（无 Markdown 标题）
@@ -139,12 +139,14 @@ marker 应放在**含有具体内容的最低条款层级**的起始位置，避
 2.1.2.1 故障响应
 2.1.2.2 版本升级
 ```
-应输出的 clause_markers：
-- {"title": "合作期限", "marker": "1. 合作期限\n本合同期限为 2 年。"}
-- {"title": "合作范围-服务内容-软件开发", "marker": "2.1.1 软件开发\n2.1.1.1 后端服务"}
-- {"title": "合作范围-服务内容-技术支持", "marker": "2.1.2 技术支持\n2.1.2.1 故障响应"}
+应输出的 clause_markers（每个有独立编号的层级都打 marker，title 仅取本层标题、level 为层级深度）：
+- {"title": "合作期限", "level": 0, "marker": "1. 合作期限\n本合同期限为 2 年。"}
+- {"title": "合作范围", "level": 0, "marker": "2. 合作范围"}
+- {"title": "服务内容", "level": 1, "marker": "2.1 服务内容"}
+- {"title": "软件开发", "level": 2, "marker": "2.1.1 软件开发\n2.1.1.1 后端服务"}
+- {"title": "技术支持", "level": 2, "marker": "2.1.2 技术支持\n2.1.2.1 故障响应"}
 
-注意："2. 合作范围"与"2.1 服务内容"不独立打 marker（太粗）；4 级编号也不打 marker（太碎）。
+注意：不标记 4 级编号（太碎，属于最低层级的枚举子项）；"合作范围"和"服务内容"虽无正文内容，但作为结构节点仍需标记。
 
 ## 示例 2：列表型条款（标题 + 字母枚举，双语合同常见结构，最深 Markdown 标题为 ####）
 本示例假设本次任务的 Markdown 切分锚点为 `###`（全文出现 ### 与 ####，按「倒数第二层」则取 ###）。
@@ -164,18 +166,19 @@ a. The Service Provider shall provide ...
    服务提供者应向公司提供...
 b. The Service Provider shall provide regular update ...
 ```
-应输出的 clause_markers（按「硬规则」每个 ### 标题都要有）：
-- {"title": "定义", "marker": "### 1. DEFINITIONS\n#### 定義\na. \"Affiliate\""}
-- {"title": "服务范围", "marker": "### 2. SCOPE OF SERVICE\n#### 服务范围\na."}
+应输出的 clause_markers（按「硬规则」每个 ### 标题都要有，Markdown 锚点层级为 level 0）：
+- {"title": "定义", "level": 0, "marker": "### 1. DEFINITIONS\n#### 定義\na. \"Affiliate\""}
+- {"title": "服务范围", "level": 0, "marker": "### 2. SCOPE OF SERVICE\n#### 服务范围\na."}
 
-注意：#### 不独立打 marker（比错点深一层）；字母枚举 a/b/c 也不独立打 marker；但 ### 1./### 2. 这两个同级标题**必须各自有一个 marker**，不允许 SCOPE OF SERVICE 被 DEFINITIONS 吞并。
+注意：#### 不独立打 marker（比锚点深一层）；字母枚举 a/b/c 也不独立打 marker；但 ### 1./### 2. 这两个同级标题**必须各自有一个 marker**，不允许 SCOPE OF SERVICE 被 DEFINITIONS 吞并。
 
 # 其他要求
 1. marker 必须是片段中**实际存在的连续原文**，长度 20~40 字，逐字复制不要改写、不要更改标点/空白/全半角；
 2. 即使片段以未完成的条款结尾（被截断），仍将该条款的 marker 加入列表；
 3. 如果片段中完全没有可识别的条款（前言/附件清单等），返回空数组；
-4. title提取规则：按条款层级拼接 title，不含编号；双语合同优先取中文标题，若无中文则用英文标题。例如 1.合作期限 -> 合作期限；2.1.1 软件开发 -> 合作范围-服务内容-软件开发。
-5. 双语合同规范：同一条款同时出现中、英文版本时，**只在该条款的起始位置（以先出现的语言为准）打 1 个 marker**，不要为同一条款的不同语言版本重复打 marker。摘取 marker 原文时优先选择能唯一识别该条款的 20~40 字连续原文（例如含标题编号的那一行、首个枚举项的开头等），避免选取多条款重复出现的公共句式。"""
+4. title 提取规则：仅提取本层标题，不含编号、不含上级前缀；双语合同优先取中文标题，若无中文则用英文标题。例如 1.合作期限 -> 合作期限；2.1.1 软件开发 -> 软件开发。
+5. level 为该条款在文档中的层级深度（0=最高层，如 1.；1=第二层，如 2.1；以此类推）；Markdown 文档以锚点层级为 level 0，更深标题为 level 1；
+6. 双语合同规范：同一条款同时出现中、英文版本时，**只在该条款的起始位置（以先出现的语言为准）打 1 个 marker**，不要为同一条款的不同语言版本重复打 marker。摘取 marker 原文时优先选择能唯一识别该条款的 20~40 字连续原文（例如含标题编号的那一行、首个枚举项的开头等），避免选取多条款重复出现的公共句式。"""
 
 
 RECOVER_PROMPT = """你是合同解析助手。以下合同片段中包含一个指定标题的条款，请找到该条款并**逐字复制**其完整原文。
@@ -274,6 +277,9 @@ class ContractSlicingHandler(BaseSlicingHandler):
             # 兜底：LLM 未能识别任何条款，整篇作为单一条款
             self._processing_warnings.append("未识别出任何条款，整篇作为单一条款入库")
             clauses = [{"clause_title": None, "content": raw_content.strip()}]
+
+        # 用 level 堆栈组装完整 title（如 "合作范围-服务内容-软件开发"）
+        clauses = self._build_full_titles(clauses)
 
         # 合并同 title 的连续条款：跨窗口边界导致同一条款被切分为多条时，拼接 content
         clauses = self._merge_adjacent_same_title(clauses)
@@ -450,9 +456,12 @@ class ContractSlicingHandler(BaseSlicingHandler):
             for m in keep:
                 self._append_marker(all_markers, seen_markers, m, cursor, chunk_end)
 
-            # 更新跨页上下文：取本轮 keep 列表最后一个 marker 的完整 title
+            # 更新跨页上下文：取本轮 keep 列表最后一个 marker 的 title + level
             if keep:
-                last_top_clause = (keep[-1].get("title") or "").strip() or None
+                last_top = keep[-1]
+                last_title = (last_top.get("title") or "").strip()
+                last_level = last_top.get("level", 0)
+                last_top_clause = f"{last_title} (level {last_level})" if last_title else None
 
             if is_last_window:
                 break
@@ -566,7 +575,42 @@ class ContractSlicingHandler(BaseSlicingHandler):
                     f"⚠️ 该条款解析失败，请人工补充原文。\n"
                     f"（原始起始标记：{marker_preview}...）"
                 )
-            clauses.append({"clause_title": m["title"], "content": content})
+            clauses.append({"clause_title": m["title"], "level": m.get("level", 0), "content": content})
+        return clauses
+
+    @staticmethod
+    def _build_full_titles(clauses: list[dict]) -> list[dict]:
+        """用 level 堆栈将 LLM 输出的本层标题组装为完整路径。
+
+        LLM 只输出本层标题（如"软件开发"）+ level（如 2），
+        此方法按 level 维护一个堆栈，逐级拼接完整 title（如"合作范围-服务内容-软件开发"）。
+
+        规则：
+        - level 0 入栈，清空更深层级
+        - level N 入栈时，弹出所有 level >= N 的栈顶
+        - 最终 title = 栈中所有 title 用 "-" 拼接
+        """
+        if not clauses:
+            return clauses
+
+        level_stack: list[tuple[int, str]] = []
+        for clause in clauses:
+            local_title = (clause.get("clause_title") or "").strip()
+            level = clause.get("level", 0)
+
+            if not local_title:
+                # title 为空时保留原样（如兜底 clause）
+                continue
+
+            # 弹出 >= 当前 level 的栈顶（同级或更深层级）
+            while level_stack and level_stack[-1][0] >= level:
+                level_stack.pop()
+
+            level_stack.append((level, local_title))
+
+            full_path = "-".join(t for _, t in level_stack)
+            clause["clause_title"] = full_path
+
         return clauses
 
     @staticmethod

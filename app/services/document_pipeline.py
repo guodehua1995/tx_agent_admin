@@ -379,13 +379,67 @@ class DocumentPipeline:
 
         llama_docs = []
         chunk_count = 0
+
+        # 构建条款树：按倒数第二层级合并子条款内容为 chunk
+        max_level = max(
+            (len([p for p in (c.get("clause_title") or "").split("-") if p.strip()]) - 1)
+            for c in clauses
+            if c.get("clause_title")
+        )
+        target_level = max(0, max_level - 1)
+
+        # 建立父子关系：parent_path -> list of child clauses
+        children_map: dict[str, list] = {}
         for clause in clauses:
+            title = clause.get("clause_title") or ""
+            parts = [p.strip() for p in title.split("-") if p.strip()]
+            if len(parts) > 1:
+                parent_path = "-".join(parts[:-1])
+                children_map.setdefault(parent_path, []).append(clause)
+
+        def _collect_descendant_content(clause_title: str, collected: set) -> str:
+            """递归收集所有子条款内容"""
+            if clause_title in collected:
+                return ""
+            collected.add(clause_title)
+            parts: list[str] = []
+            for child in children_map.get(clause_title, []):
+                child_content = (child.get("content") or "").strip()
+                if child_content:
+                    parts.append(child_content)
+                child_title = child.get("clause_title") or ""
+                if child_title:
+                    grand = _collect_descendant_content(child_title, collected)
+                    if grand:
+                        parts.append(grand)
+            return "\n\n".join(parts)
+
+        for clause in clauses:
+            title = clause.get("clause_title") or ""
             content = (clause.get("content") or "").strip()
-            if not content:
+            parts = [p.strip() for p in title.split("-") if p.strip()]
+            level = len(parts) - 1 if parts else 0
+
+            # 跳过比 target_level 更深的层级（会被父级合并）
+            if level > target_level:
+                continue
+
+            # 跳过高于 target_level 且有子条款的层级（子条款会在 target_level 处理）
+            if level < target_level and title and title in children_map:
+                continue
+
+            # 合并自身内容 + 所有子条款内容（仅 target_level 需要收集子孙）
+            combined = content
+            if title and level == target_level:
+                descendant_content = _collect_descendant_content(title, set())
+                if descendant_content:
+                    combined = f"{combined}\n\n{descendant_content}" if combined else descendant_content
+
+            if not combined.strip():
                 continue
 
             # 大条款内部子切分：每个子chunk共享同一条款的 clause_index / clause_title
-            sub_chunks = _split_clause_content(content, max_chars=500)
+            sub_chunks = _split_clause_content(combined.strip(), max_chars=500)
             for sub_text in sub_chunks:
                 header = (
                     f"[合同: {doc.title} | "
@@ -473,11 +527,12 @@ class DocumentPipeline:
             parts = [p.strip() for p in clause_title.split("-") if p.strip()]
             level = len(parts) - 1 if parts else 0
 
-            # 确定 parent
+            # 确定 parent：如果中间层级缺失，自动创建占位 clause
             parent_id = None
             if level > 0 and len(parts) > 1:
-                parent_path = "-".join(parts[:-1])
-                parent_id = parent_map.get(parent_path)
+                parent_id = await self._ensure_parent_chain(
+                    contract, clause_title, parent_map,
+                )
 
             # 概要 clause 的 summary
             summary = None
@@ -506,6 +561,48 @@ class DocumentPipeline:
         logger.info(
             f"Contract saved: doc_id={doc.id}, contract_id={contract.id}, clauses={clause_count}"
         )
+
+    async def _ensure_parent_chain(
+        self,
+        contract: Contract,
+        clause_title: str,
+        parent_map: dict[str, int],
+    ) -> int | None:
+        """确保中间层级父条款存在，缺失时自动创建占位 clause。
+
+        场景：LLM 跳过了"太粗"的中间层级（如只输出"合作范围-服务内容-软件开发"，
+        跳过了"合作范围"和"合作范围-服务内容"），导致 parent_map 中找不到父级。
+        此方法逐级检查并创建占位 clause，保证树结构完整。
+        """
+        parts = [p.strip() for p in clause_title.split("-") if p.strip()]
+        if len(parts) <= 1:
+            return None
+
+        current_parent_id = None
+        for i in range(len(parts) - 1):
+            prefix = "-".join(parts[: i + 1])
+            if prefix in parent_map:
+                current_parent_id = parent_map[prefix]
+            else:
+                level = i
+                # 占位 clause 使用负数 clause_index，避免与真实条款冲突
+                placeholder_index = -(len(parent_map) + 1)
+                placeholder = await ContractClause.create(
+                    contract=contract,
+                    parent_id=current_parent_id,
+                    clause_index=placeholder_index,
+                    clause_title=prefix,
+                    clause_level=level,
+                    original_text="",
+                    sort_order=placeholder_index,
+                )
+                parent_map[prefix] = placeholder.id
+                current_parent_id = placeholder.id
+                logger.debug(
+                    f"[pipeline] Created placeholder clause: title={prefix}, level={level}"
+                )
+
+        return current_parent_id
 
     async def _get_or_create_client(self, name: str) -> int | None:
         """根据名称匹配或创建 Client"""

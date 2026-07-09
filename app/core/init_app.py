@@ -411,13 +411,21 @@ async def init_redis():
 
 async def init_data():
     await init_db()
+    logger.info("[InitData] Database initialized")
     await init_superuser()
+    logger.info("[InitData] Superuser initialized")
     await init_menus()
+    logger.info("[InitData] Menus initialized")
     await init_apis()
+    logger.info("[InitData] APIs initialized")
     await init_roles()
+    logger.info("[InitData] Roles initialized")
     await init_vector_store()
+    logger.info("[InitData] Vector store initialized")
     await init_redis()
+    logger.info("[InitData] Redis initialized")
     await init_feishu_ws_clients()
+    logger.info("[InitData] Feishu WS clients initialized")
     # 确保 media 存储目录存在
     from pathlib import Path
     Path(settings.MEDIA_ROOT).mkdir(parents=True, exist_ok=True)
