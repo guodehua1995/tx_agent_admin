@@ -174,6 +174,10 @@ def _call_ocr_pdf_sync(pdf_batch_bytes: bytes, page_start: int, page_num: int) -
     visual_service = VisualService()
     visual_service.set_ak(ak)
     visual_service.set_sk(sk)
+    # 设置超时时间（默认 30s，大 PDF 处理可能不够）
+    timeout = settings.VOLC_OCR_TIMEOUT
+    visual_service.service_info.connection_timeout = timeout
+    visual_service.service_info.socket_timeout = timeout
 
     base64_data = base64.b64encode(pdf_batch_bytes).decode("utf-8")
 

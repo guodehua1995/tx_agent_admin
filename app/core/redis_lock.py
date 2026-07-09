@@ -69,6 +69,24 @@ class RedisLock:
         logger.debug(f"[RedisLock] Failed to acquire: key={key}")
         return None
 
+    async def renew(self, key: str, token: str, ttl: int = 300) -> bool:
+        """续活锁（延长 TTL），仅当 token 匹配时生效
+
+        Returns:
+            True 续活成功，False token 不匹配或锁已过期
+        """
+        redis = get_redis()
+        # Lua: 验证 token 后重置 TTL
+        lua = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+        result = await redis.eval(lua, 1, key, token, ttl)
+        return bool(result)
+
     async def release(self, key: str, token: str) -> bool:
         """释放锁（Lua 脚本原子操作，验证 token 归属）
 

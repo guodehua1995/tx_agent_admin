@@ -99,6 +99,7 @@ class Settings(BaseSettings):
     VOLC_SK: str = ""
     VOLC_OCR_MAX_RETRIES: int = 3       # OCR 失败最大重试次数
     VOLC_OCR_RETRY_DELAY: float = 2.0   # 重试基础等待秒数
+    VOLC_OCR_TIMEOUT: int = 120          # OCR 请求超时（秒），大 PDF 需要更长处理时间
 
     # 飞书 IM 图片 image_key 缓存（避免同一截图重复上传）
     IMAGE_KEY_CACHE_BACKEND: str = "memory"  # memory | redis（redis 待实现）

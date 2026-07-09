@@ -2,9 +2,11 @@
 
 import asyncio
 
+from app.core.redis_lock import LockKey, RedisLock
 from app.log import logger
 from app.settings.config import settings
 
+from .scheduler_lock import SCHEDULER_LOCK_TTL, reset_scheduler_lock, renew_scheduler_lock, set_scheduler_lock
 from .tasks import get_all_tasks
 
 
@@ -63,12 +65,31 @@ class TaskScheduler:
                 logger.exception("[Scheduler] Scan loop error, will retry next cycle")
 
     async def _run_all_tasks(self):
-        """依次执行所有注册的补偿任务"""
-        tasks = get_all_tasks()
-        for task_func in tasks:
-            if not self._running:
-                break
-            try:
-                await task_func()
-            except Exception:
-                logger.exception(f"[Scheduler] Task {task_func.__name__} failed")
+        """依次执行所有注册的补偿任务
+
+        通过 Redis 分布式锁确保多 worker 下只有一个 worker 执行本轮任务。
+        每个任务执行前续活锁，防止长时间任务导致锁过期。
+        """
+        lock = RedisLock()
+        token = await lock.acquire(LockKey.SCHEDULER_SCAN, ttl=SCHEDULER_LOCK_TTL)
+        if not token:
+            logger.debug("[Scheduler] Another worker is running tasks, skip this cycle")
+            return
+
+        # 将锁信息存入上下文变量，供子任务续活
+        ctx_token = set_scheduler_lock(LockKey.SCHEDULER_SCAN, token, lock)
+
+        try:
+            tasks = get_all_tasks()
+            for task_func in tasks:
+                if not self._running:
+                    break
+                # 每个任务执行前续活锁
+                await renew_scheduler_lock()
+                try:
+                    await task_func()
+                except Exception:
+                    logger.exception(f"[Scheduler] Task {task_func.__name__} failed")
+        finally:
+            reset_scheduler_lock(ctx_token)
+            await lock.release(LockKey.SCHEDULER_SCAN, token)

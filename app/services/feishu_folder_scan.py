@@ -22,6 +22,7 @@ from app.models.rag import (
     FeishuFolderWatch,
     KnowledgeBase,
 )
+from app.scheduler.scheduler_lock import renew_scheduler_lock
 from app.services.document_pipeline import document_pipeline
 from app.services.extraction.base import CONVERTIBLE_EXTENSIONS
 from app.services.feishu_service import feishu_service
@@ -355,6 +356,8 @@ class FeishuFolderScanService:
 
         ingested = 0
         for f in batch:
+            # 续活调度器锁，防止长循环导致锁过期
+            await renew_scheduler_lock()
             try:
                 if await self._ingest_one(watch, f):
                     ingested += 1
@@ -495,6 +498,8 @@ class FeishuFolderScanService:
 
         re_ingested = 0
         for f in batch:
+            # 续活调度器锁，防止长循环导致锁过期
+            await renew_scheduler_lock()
             try:
                 if await self._re_ingest_one(watch, f):
                     re_ingested += 1

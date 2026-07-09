@@ -13,6 +13,7 @@ from app.core.redis_lock import LockKey
 from app.log import logger
 from app.models.enums import DocumentStatus
 from app.models.rag import Document, FeishuFolderWatch
+from app.scheduler.scheduler_lock import renew_scheduler_lock
 from app.services.document_pipeline import document_pipeline
 
 # 中间态超时阈值（分钟）
@@ -77,6 +78,8 @@ async def compensate_pending_extract():
 
     # 串行执行：逐个处理，避免 OCR 并发冲突
     for doc in candidates:
+        # 续活调度器锁，防止长循环导致锁过期
+        await renew_scheduler_lock()
         try:
             logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
             await document_pipeline.extract(doc.id)
@@ -119,6 +122,8 @@ async def compensate_approved():
 
     # 串行执行：逐个处理
     for doc in docs:
+        # 续活调度器锁，防止长循环导致锁过期
+        await renew_scheduler_lock()
         try:
             logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
             await document_pipeline.vectorize(doc.id)
