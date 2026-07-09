@@ -5,6 +5,7 @@
 
 核心特性：
 - 自适应 PDF 拆分策略（按 base64 大小选择批次页数：全量 → 10 → 5 → 2 → 1）
+- 单页超大 PDF 自动压缩（JPEG + 降 DPI）后继续调 OCR API
 - QPS=2 限流（asyncio.Semaphore 全局锁）
 - 失败自动重试（不修改数据，仅重试）
 - 多线程安全
@@ -45,21 +46,25 @@ _MAX_BASE64_SIZE = 5 * 1024 * 1024  # 5MB
 _SPLIT_TIERS = [10, 5, 2, 1]
 
 
-def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[bytes]:
+def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[tuple[bytes, int]]:
     """将 PDF 按页数拆分为多个子 PDF 字节。
+
+    拆分后校验每个批次的实际 base64 大小，超限的批次自动递归再拆分，
+    确保所有批次都满足 API 的 image_base64 大小限制。
 
     Args:
         pdf_bytes: 完整 PDF 文件字节
         pages_per_batch: 每批包含的页数
 
     Returns:
-        子 PDF 字节列表
+        子 PDF (字节, 页数) 元组列表。
+        单页超限的批次标记为 page_count=0，表示需要 VisionLLM fallback。
     """
     import fitz  # PyMuPDF
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(doc)
-    batches = []
+    raw_batches: list[tuple[int, int, bytes]] = []  # (start_page, end_page, pdf_bytes)
 
     for start in range(0, total_pages, pages_per_batch):
         end = min(start + pages_per_batch, total_pages)
@@ -68,16 +73,44 @@ def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[bytes]:
 
         buf = BytesIO()
         batch_doc.save(buf)
-        batches.append(buf.getvalue())
+        batch_bytes = buf.getvalue()
         batch_doc.close()
 
+        raw_batches.append((start, end, batch_bytes))
         logger.info(
             f"[VolcOCR] PDF batch: pages {start + 1}-{end}/{total_pages}, "
-            f"size={len(buf.getvalue()) / 1024:.1f}KB"
+            f"size={len(batch_bytes) / 1024:.1f}KB"
         )
 
     doc.close()
-    return batches
+
+    # 校验每个批次的实际 base64 大小，超限则递归再拆分
+    result: list[tuple[bytes, int]] = []
+    for start, end, batch_bytes in raw_batches:
+        b64_size = len(base64.b64encode(batch_bytes))
+        page_count = end - start
+        if b64_size <= _MAX_BASE64_SIZE:
+            result.append((batch_bytes, page_count))
+        else:
+            if page_count <= 1:
+                # 单页仍超限，标记 page_count=0 表示需要 VisionLLM fallback
+                logger.warning(
+                    f"[VolcOCR] 单页 base64={b64_size / 1024 / 1024:.2f}MB "
+                    f"超限 (page {start + 1})，将使用 VisionLLM fallback"
+                )
+                result.append((batch_bytes, 0))  # page_count=0 → VisionLLM fallback
+            else:
+                # 递归拆分：页数减半
+                half = max(1, page_count // 2)
+                logger.warning(
+                    f"[VolcOCR] 批次 pages {start + 1}-{end} "
+                    f"base64={b64_size / 1024 / 1024:.2f}MB 超限，"
+                    f"递归拆分为 {half} 页/批"
+                )
+                sub_batches = _split_pdf(batch_bytes, half)
+                result.extend(sub_batches)
+
+    return result
 
 
 def _determine_batch_size(pdf_bytes: bytes, total_pages: int) -> int:
@@ -165,7 +198,7 @@ async def _call_ocr_with_retry(
 ) -> str:
     """带限流和重试的 OCR 调用。
 
-    - 通过 Semaphore 限制最多 2 个并发
+    - 通过 Semaphore 限制同时只有 1 个请求（严格串行）
     - 失败时不修改数据，仅重试
     - 重试间隔指数退避
 
@@ -231,6 +264,84 @@ async def _call_ocr_with_retry(
                     raise
 
 
+def _compress_oversized_page(pdf_bytes: bytes, max_base64_mb: float = 7.5) -> bytes:
+    """将超大的单页 PDF 压缩为更小的 PDF。
+
+    策略：渲染为 JPEG 图片（逐步降低质量/DPI），嵌入新 PDF，
+    确保 base64 编码后不超过 API 限制。
+
+    Args:
+        pdf_bytes: 包含单页的 PDF 字节
+        max_base64_mb: 目标最大 base64 大小（MB），默认 7.5MB
+
+    Returns:
+        压缩后的单页 PDF 字节
+    """
+    import fitz  # PyMuPDF
+
+    max_bytes = int(max_base64_mb * 1024 * 1024)
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    page_rect = page.rect  # 原始页面尺寸
+
+    # 逐步尝试不同 DPI + JPEG 质量组合，直到 base64 大小达标
+    configs = [
+        (200, 85),
+        (200, 60),
+        (150, 70),
+        (150, 50),
+        (120, 50),
+        (100, 40),
+    ]
+
+    compressed_pdf = None
+    for dpi, jpeg_quality in configs:
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        pix = page.get_pixmap(matrix=mat)
+
+        # 渲染为 JPEG
+        jpeg_bytes = pix.tobytes("jpeg", jpg_quality=jpeg_quality)
+
+        # 创建新的单页 PDF，嵌入 JPEG 图片
+        new_doc = fitz.open()
+        new_page = new_doc.new_page(width=page_rect.width, height=page_rect.height)
+        new_page.insert_image(new_page.rect, stream=jpeg_bytes)
+
+        buf = BytesIO()
+        new_doc.save(buf, garbage=4, deflate=True)
+        new_doc.close()
+
+        candidate = buf.getvalue()
+        b64_size = len(base64.b64encode(candidate))
+
+        if b64_size <= max_bytes:
+            logger.info(
+                f"[VolcOCR] 单页压缩成功: {len(pdf_bytes) / 1024:.0f}KB → "
+                f"{len(candidate) / 1024:.0f}KB (base64={b64_size / 1024 / 1024:.2f}MB), "
+                f"dpi={dpi}, jpeg_quality={jpeg_quality}"
+            )
+            compressed_pdf = candidate
+            break
+        else:
+            logger.debug(
+                f"[VolcOCR] 单页压缩尝试 dpi={dpi}, quality={jpeg_quality}: "
+                f"base64={b64_size / 1024 / 1024:.2f}MB > {max_base64_mb}MB"
+            )
+
+    doc.close()
+
+    if compressed_pdf is None:
+        # 所有配置都不满足，用最后一档的结果（总比直接报错好）
+        logger.warning(
+            f"[VolcOCR] 单页压缩未达标，使用最低配置结果 "
+            f"(base64={b64_size / 1024 / 1024:.2f}MB > {max_base64_mb}MB)"
+        )
+        compressed_pdf = candidate  # noqa: F821
+
+    return compressed_pdf
+
+
 async def ocr_pdf_to_markdown(pdf_bytes: bytes) -> str:
     """将 PDF 通过火山引擎 OCR 解析为 Markdown。
 
@@ -264,30 +375,47 @@ async def ocr_pdf_to_markdown(pdf_bytes: bytes) -> str:
         f"batch_size={batch_size}, file_size={len(pdf_bytes) / 1024:.1f}KB"
     )
 
-    # 拆分 PDF
+    # 拆分 PDF（每个批次包含实际页数可能因递归拆分而不同）
     batches = _split_pdf(pdf_bytes, batch_size)
     logger.info(f"[VolcOCR] 共 {len(batches)} 个批次待处理")
 
-    # 逐批处理（受 Semaphore 限流，不会超过 2 并发）
+    # 逐批处理（受 Semaphore 限流，严格串行）
     all_markdowns: list[str] = []
-    for i, batch_bytes in enumerate(batches):
-        page_start = i * batch_size
-        page_num = min(batch_size, total_pages - page_start)
-
+    page_offset = 0  # 累计页偏移，用于错误信息中的页码定位
+    for i, (batch_bytes, batch_page_count) in enumerate(batches):
         try:
-            md = await _call_ocr_with_retry(
-                pdf_batch_bytes=batch_bytes,
-                page_start=0,  # 子 PDF 从第 0 页开始
-                page_num=page_num,
-                batch_index=i + 1,
-            )
-            all_markdowns.append(md)
+            if batch_page_count == 0:
+                # 单页超大 PDF，压缩后继续调 OCR API
+                logger.info(
+                    f"[VolcOCR] batch {i + 1}: 单页超大，"
+                    f"压缩后重试 OCR (page {page_offset + 1})"
+                )
+                compressed = _compress_oversized_page(batch_bytes)
+                md = await _call_ocr_with_retry(
+                    pdf_batch_bytes=compressed,
+                    page_start=0,
+                    page_num=1,
+                    batch_index=i + 1,
+                )
+                all_markdowns.append(md)
+                page_offset += 1
+            else:
+                md = await _call_ocr_with_retry(
+                    pdf_batch_bytes=batch_bytes,
+                    page_start=0,  # 子 PDF 从第 0 页开始
+                    page_num=batch_page_count,
+                    batch_index=i + 1,
+                )
+                all_markdowns.append(md)
+                page_offset += batch_page_count
         except Exception as e:
+            actual_pages = batch_page_count if batch_page_count > 0 else 1
             logger.error(f"[VolcOCR] batch {i + 1} 最终失败: {e}")
             # 失败的批次插入占位标记，不中断整体流程
             all_markdowns.append(
-                f"\n\n> [OCR 识别失败: 第 {page_start + 1}-{page_start + page_num} 页, 错误: {e}]\n\n"
+                f"\n\n> [OCR 识别失败: 第 {page_offset + 1}-{page_offset + actual_pages} 页, 错误: {e}]\n\n"
             )
+            page_offset += actual_pages
 
     full_markdown = "\n\n".join(all_markdowns)
     logger.info(
