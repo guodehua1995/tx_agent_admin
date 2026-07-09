@@ -346,20 +346,23 @@ class ContractSlicingHandler(BaseSlicingHandler):
         try:
             raw = await self.call_llm(prompt, text)
             data = json.loads(_extract_json(raw))
+            signing_date = _parse_date(data.get("signing_date", ""))
+            expiry_date = _parse_date(data.get("expiry_date", ""))
+            total_amount = _parse_amount(data.get("total_amount"))
             return {
                 "party_a": data.get("party_a", "") or "",
                 "party_b": data.get("party_b", "") or "",
                 "contract_type": data.get("contract_type", "其他") or "其他",
-                "signing_date": _parse_date(data.get("signing_date", "")),
-                "expiry_date": _parse_date(data.get("expiry_date", "")),
-                "total_amount": _parse_amount(data.get("total_amount")),
+                "signing_date": signing_date.strftime("%Y-%m-%d") if signing_date else "",
+                "expiry_date": expiry_date.strftime("%Y-%m-%d") if expiry_date else "",
+                "total_amount": str(total_amount) if total_amount is not None else "",
             }
         except Exception as e:
             logger.exception("[contract] meta extraction failed")
             self._processing_warnings.append(f"元信息提取失败，需人工补充: {e}")
             return {
                 "party_a": "", "party_b": "", "contract_type": "其他",
-                "signing_date": None, "expiry_date": None, "total_amount": None,
+                "signing_date": "", "expiry_date": "", "total_amount": "",
             }
 
     @staticmethod
