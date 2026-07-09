@@ -721,7 +721,7 @@ class ContractSlicingHandler(BaseSlicingHandler):
             for c in clauses[:SUMMARY_CONTEXT_CLAUSES]
         )
         user_input = (
-            f"合同元信息：{json.dumps(meta, ensure_ascii=False)}\n\n"
+            f"合同元信息：{json.dumps(meta, ensure_ascii=False, default=str)}\n\n"
             f"主要条款：\n{head_clauses_text}"
         )
         try:
