@@ -10,6 +10,7 @@ from deepagents import create_deep_agent
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.log import logger
+from app.core.checkpointer import get_checkpointer
 from app.agents.tools.contract_tools import (
     CompareClauseFulltextToolProvider,
     CompareClauseSummariesToolProvider,
@@ -37,6 +38,10 @@ SYSTEM_PROMPT = """你是一个专业的合同管理助手。你可以帮助用�
 - 如果搜索无结果，如实告知用户并建议调整搜索条件
 - 涉及合同金额、条款等敏感信息时，确保数据准确
 - 不要臆造不存在的合同数据
+
+## 参考资料
+- 当回答涉及具体合同时，必须将工具返回的 document_url 作为参考资料链接附在回答末尾
+- 格式：\n\n**参考资料：**\n- [合同名称](document_url)
 
 ## 输出格式
 - 回答使用 Markdown 格式，便于阅读
@@ -78,7 +83,7 @@ class ContractAgent(BaseAgent):
         Args:
             input_data: {
                 "question": str,
-                "history": list[dict],  # [{"role": "user"|"assistant", "content": str}]
+                "conversation_id": int,   # 用于 thread_id，自动恢复上下文
                 "user_id": int,
                 "agent_id": int,
             }
@@ -87,10 +92,10 @@ class ContractAgent(BaseAgent):
             {"answer": str, "sources": list, "tool_calls": list}
         """
         question = input_data.get("question", "")
-        history = input_data.get("history", [])
+        conversation_id = input_data.get("conversation_id", 0)
 
         logger.debug(
-            f"[ContractAgent] question={question[:50]}, history_turns={len(history)}"
+            f"[ContractAgent] question={question[:50]}, conv_id={conversation_id}"
         )
 
         try:
@@ -98,41 +103,47 @@ class ContractAgent(BaseAgent):
             contract_tools = await self._build_contract_tools()
             logger.debug(f"[ContractAgent] tools count={len(contract_tools)}")
 
-            # 构建历史消息
-            messages = []
-            for msg in history:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                if role in ("user", "assistant"):
-                    messages.append({"role": role, "content": content})
-
-            # 添加当前问题
-            messages.append({"role": "user", "content": question})
-
-            # 创建 Deep Agent
+            # 创建 Deep Agent，注入 PostgreSQL checkpointer
             agent = create_deep_agent(
                 model=self.llm,
                 tools=contract_tools,
                 system_prompt=SYSTEM_PROMPT,
+                checkpointer=get_checkpointer(),
             )
 
-            # 执行
-            result = await agent.ainvoke({"messages": messages})
+            # 执行：thread_id 使用 conversation_id，checkpointer 自动恢复上下文
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": question}]},
+                config={"configurable": {"thread_id": str(conversation_id)}},
+            )
 
             # 提取最终输出
             all_messages = result.get("messages", [])
             final_output = all_messages[-1].content if all_messages else ""
 
-            # 提取工具调用信息
+            # 提取工具调用信息（AIMessage.tool_calls + ToolMessage.content 匹配）
             tool_calls = []
+            tool_results = {}  # tool_call_id → content
             for msg in all_messages:
+                # 收集 AIMessage 中的 tool_calls
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for tc in msg.tool_calls:
+                        tc_id = tc.get("id", "")
                         tool_calls.append({
                             "tool_name": tc.get("name", ""),
                             "tool_input": tc.get("args", {}),
-                            "tool_output": "",  # deepagents 可能不直接暴露 tool output
+                            "tool_call_id": tc_id,
+                            "tool_output": "",
                         })
+                # 收集 ToolMessage 中的结果
+                if hasattr(msg, "tool_call_id") and hasattr(msg, "content"):
+                    tool_results[msg.tool_call_id] = msg.content
+
+            # 匹配结果回填 tool_output
+            for tc in tool_calls:
+                tc_id = tc.pop("tool_call_id", "")
+                if tc_id in tool_results:
+                    tc["tool_output"] = tool_results[tc_id]
 
             logger.debug(
                 f"[ContractAgent] Done: answer_len={len(final_output)}, tool_calls={len(tool_calls)}"

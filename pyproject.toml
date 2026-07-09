@@ -96,6 +96,8 @@ dependencies = [
     "redis>=5.0.0",
     "pypinyin>=0.55.0",
     "deepagents>=0.5.3",
+    "langgraph-checkpoint-postgres>=3.0.4",
+    "psycopg-binary>=3.3.4",
 ]
 
 [tool.black]

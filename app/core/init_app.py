@@ -409,6 +409,17 @@ async def init_redis():
         logger.warning(f"Redis initialization skipped: {e}")
 
 
+async def init_checkpointer():
+    """初始化 LangGraph PostgreSQL checkpointer"""
+    from app.core.checkpointer import init_checkpointer as _init
+    from app.settings.config import settings
+
+    try:
+        await _init(settings.DB_URL)
+    except Exception as e:
+        logger.warning(f"Checkpointer initialization skipped: {e}")
+
+
 async def init_data():
     await init_db()
     logger.info("[InitData] Database initialized")
@@ -426,6 +437,8 @@ async def init_data():
     logger.info("[InitData] Redis initialized")
     await init_feishu_ws_clients()
     logger.info("[InitData] Feishu WS clients initialized")
+    await init_checkpointer()
+    logger.info("[InitData] Checkpointer initialized")
     # 确保 media 存储目录存在
     from pathlib import Path
     Path(settings.MEDIA_ROOT).mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,7 @@ from tortoise.expressions import Q
 
 from app.log import logger
 from app.services.contract_service import contract_service
-from app.models.contract import ContractClause, ContractRiskReport
+from app.models.contract import Contract, ContractClause, ContractRiskReport
 
 # 飞书上下文变量（由 feishu_ws_manager / feishu.py 在消息处理入口设置）
 chat_context: contextvars.ContextVar = contextvars.ContextVar("chat_context", default=None)
@@ -90,6 +90,14 @@ class ContractReviewTriggerArgs(BaseModel):
 
 
 # ── 核心查询逻辑 ─────────────────────────────────────────────────
+
+
+async def _batch_fetch_contract_urls(contract_ids: set[int]) -> dict[int, str | None]:
+    """批量获取合同文档链接，避免 N+1 查询"""
+    if not contract_ids:
+        return {}
+    contracts = await Contract.filter(id__in=list(contract_ids), is_deleted=False).all()
+    return {c.id: c.document_url for c in contracts}
 
 
 async def _contract_search(
@@ -170,6 +178,10 @@ async def _contract_clause_search(
         if not items:
             return json.dumps({"message": "未找到匹配的条款"}, ensure_ascii=False)
 
+        # 批量获取合同链接
+        contract_ids = {c.get("contract_id") for c in items if c.get("contract_id")}
+        contract_urls = await _batch_fetch_contract_urls(contract_ids)
+
         return json.dumps({
             "total": result["total"],
             "clauses": [
@@ -180,6 +192,7 @@ async def _contract_clause_search(
                     "clause_index": c.get("clause_index"),
                     "original_text": c.get("original_text", "")[:300],
                     "summary": c.get("summary", "")[:200] if c.get("summary") else "",
+                    "document_url": contract_urls.get(c["contract_id"]),
                 }
                 for c in items
             ],
@@ -239,10 +252,21 @@ async def _compare_clause_summaries(
         if not result:
             return json.dumps({"message": "未找到匹配的条款"}, ensure_ascii=False)
 
+        # 批量获取合同链接
+        contract_ids = {c.get("contract_id") for c in result if c.get("contract_id")}
+        contract_urls = await _batch_fetch_contract_urls(contract_ids)
+
+        clauses = []
+        for c in result[:limit]:
+            clauses.append({
+                **c,
+                "document_url": contract_urls.get(c["contract_id"]),
+            })
+
         return json.dumps({
             "clause_title": clause_title,
             "count": len(result),
-            "clauses": result[:limit],
+            "clauses": clauses,
         }, ensure_ascii=False)
     except Exception as e:
         logger.error("[CompareClauseSummariesTool] Error: %s", e, exc_info=True)
@@ -262,10 +286,21 @@ async def _compare_clause_fulltext(
         if not result:
             return json.dumps({"message": "未找到匹配的条款"}, ensure_ascii=False)
 
+        # 批量获取合同链接
+        contract_ids = {c.get("contract_id") for c in result if c.get("contract_id")}
+        contract_urls = await _batch_fetch_contract_urls(contract_ids)
+
+        clauses = []
+        for c in result:
+            clauses.append({
+                **c,
+                "document_url": contract_urls.get(c["contract_id"]),
+            })
+
         return json.dumps({
             "clause_title": clause_title,
             "count": len(result),
-            "clauses": result,
+            "clauses": clauses,
         }, ensure_ascii=False)
     except Exception as e:
         logger.error("[CompareClauseFulltextTool] Error: %s", e, exc_info=True)
@@ -366,8 +401,17 @@ async def _query_contract_clause(
             logger.debug(f"[_query_contract_clause] No clauses found for keywords={keywords}")
             return json.dumps({"message": f"未找到匹配条款"}, ensure_ascii=False)
 
+        # 获取合同链接
+        contract = await Contract.filter(id=contract_id, is_deleted=False).first()
+        document_url = contract.document_url if contract else None
+
         logger.debug(f"[_query_contract_clause] Found {len(all_results)} matching clauses")
-        return json.dumps({"count": len(all_results), "clauses": all_results}, ensure_ascii=False)
+        return json.dumps({
+            "contract_id": contract_id,
+            "document_url": document_url,
+            "count": len(all_results),
+            "clauses": all_results,
+        }, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[_query_contract_clause] Error: {e}", exc_info=True)
         return json.dumps({"error": f"查询异常: {str(e)}"}, ensure_ascii=False)
@@ -391,9 +435,12 @@ async def _trigger_contract_review(
         ).first()
         if existing:
             logger.debug(f"[_trigger_contract_review] Already reviewing: status={existing.status}")
+            contract = await Contract.filter(id=contract_id, is_deleted=False).first()
             return json.dumps({
                 "message": "该合同正在审查中，请稍后再试",
                 "status": existing.status,
+                "contract_id": contract_id,
+                "document_url": contract.document_url if contract else None,
             }, ensure_ascii=False)
 
         # 检查是否有已完成报告
@@ -403,10 +450,13 @@ async def _trigger_contract_review(
         ).order_by("-created_at").first()
         if completed and completed.feishu_doc_url:
             logger.debug(f"[_trigger_contract_review] Already completed: report_id={completed.id}")
+            contract = await Contract.filter(id=contract_id, is_deleted=False).first()
             return json.dumps({
                 "message": "该合同已有审查报告",
                 "report_id": completed.id,
                 "feishu_doc_url": completed.feishu_doc_url,
+                "contract_id": contract_id,
+                "document_url": contract.document_url if contract else None,
                 "analyzed_at": completed.analyzed_at.isoformat() if completed.analyzed_at else None,
             }, ensure_ascii=False)
 
@@ -432,10 +482,16 @@ async def _trigger_contract_review(
         )
 
         logger.debug(f"[_trigger_contract_review] Created review record: report_id={report.id}")
+
+        # 获取合同链接
+        contract = await Contract.filter(id=contract_id, is_deleted=False).first()
+        document_url = contract.document_url if contract else None
+
         return json.dumps({
             "message": "已加入审查队列，完成后会通知您",
             "report_id": report.id,
             "contract_id": contract_id,
+            "document_url": document_url,
         }, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[_trigger_contract_review] Error: {e}", exc_info=True)

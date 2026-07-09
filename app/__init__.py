@@ -25,6 +25,8 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
     yield
     await scheduler.stop()
+    from app.core.checkpointer import close_checkpointer
+    await close_checkpointer()
     from app.core.redis import close_redis
     await close_redis()
     from app.services.feishu_ws_manager import feishu_ws_manager

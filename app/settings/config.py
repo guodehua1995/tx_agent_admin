@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     DB_NAME: str = "tx_agent_admin"
 
     @property
+    def DB_URL(self) -> str:
+        """psycopg / LangGraph checkpointer 使用的连接 URL"""
+        pwd = f":{self.DB_PASSWORD}" if self.DB_PASSWORD else ""
+        return f"postgresql://{self.DB_USER}{pwd}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
+    @property
     def TORTOISE_ORM(self) -> dict:
         return {
             "connections": {

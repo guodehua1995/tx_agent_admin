@@ -20,9 +20,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 历史对话最大轮数（每个 Agent 文件可自行覆盖，此处为默认值）
-DEFAULT_MAX_HISTORY_TURNS = 10
-
 
 async def _get_chat_model():
     """获取活跃的 Chat 模型（LangChain ChatOpenAI 实例）"""
@@ -161,14 +158,11 @@ async def chat_with_agent(chat_in: ChatRequest):
     conv = await conversation_controller.get_or_create(
         agent_id=agent.id, user_id=user_id,
     )
-    history = await conversation_controller.get_messages(
-        conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True,
-    )
 
     start_time = time.time()
     result = await agent_instance.execute({
         "question": chat_in.question,
-        "history": history,
+        "conversation_id": conv.id,
         "user_id": user_id,
         "agent_id": agent.id,
     })
@@ -204,9 +198,6 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
     conv = await conversation_controller.get_or_create(
         agent_id=agent.id, user_id=user_id,
     )
-    history = await conversation_controller.get_messages(
-        conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True,
-    )
 
     start_time = time.time()
     full_answer = ""
@@ -225,7 +216,7 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
             if hasattr(agent_instance, 'execute_stream'):
                 async for chunk in agent_instance.execute_stream({
                     "question": chat_in.question,
-                    "history": history,
+                    "conversation_id": conv.id,
                     "user_id": user_id,
                     "agent_id": agent.id,
                 }):
@@ -246,7 +237,7 @@ async def chat_with_agent_stream(chat_in: ChatRequest):
             else:
                 result = await agent_instance.execute({
                     "question": chat_in.question,
-                    "history": history,
+                    "conversation_id": conv.id,
                     "user_id": user_id,
                     "agent_id": agent.id,
                 })

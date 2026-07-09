@@ -12,7 +12,7 @@ from app.core.redis import get_redis
 from app.core.redis_lock import LockKey
 from app.log import logger
 from app.models.enums import DocumentStatus
-from app.models.rag import Document
+from app.models.rag import Document, FeishuFolderWatch
 from app.services.document_pipeline import document_pipeline
 from app.settings import settings
 
@@ -25,6 +25,24 @@ async def _is_feishu_folder_managed(doc_id: int) -> bool:
     redis = get_redis()
     lock_key = f"{LockKey.FEISHU_FOLDER_INGEST}:{doc_id}"
     return bool(await redis.exists(lock_key))
+
+
+async def _should_auto_approve(doc: Document) -> bool:
+    """检查文档是否属于启用了自动审批的文件夹监听。
+
+    通过 source_meta.folder_watch_id 查找对应的 FeishuFolderWatch，
+    返回其 auto_approve 配置。
+    """
+    source_meta = doc.source_meta or {}
+    if not source_meta.get("auto_ingested"):
+        return False
+    watch_id = source_meta.get("folder_watch_id")
+    if not watch_id:
+        return False
+    watch = await FeishuFolderWatch.get_or_none(id=watch_id)
+    if watch is None:
+        return False
+    return watch.auto_approve
 
 
 async def compensate_pending_extract():
@@ -69,6 +87,13 @@ async def compensate_pending_extract():
             try:
                 logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
                 await document_pipeline.extract(doc.id)
+                # 提取成功后检查是否需要自动审批（补偿重启前丢失的 auto_approve 逻辑）
+                if await _should_auto_approve(doc):
+                    logger.info(
+                        f"[Compensate] Auto-approving: doc_id={doc.id} "
+                        f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
+                    )
+                    await document_pipeline.approve(doc.id)
             except Exception:
                 logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
 

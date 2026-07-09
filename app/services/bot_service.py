@@ -20,8 +20,6 @@ from app.utils.password import get_password_hash
 
 from app.log import logger
 
-DEFAULT_MAX_HISTORY_TURNS = 10
-
 
 class BotService:
     """飞书机器人消息处理服务"""
@@ -87,24 +85,18 @@ class BotService:
         conv = await conversation_controller.get_or_create(agent_id=agent.id, user_id=user.id)
         logger.debug("bot get conversation")
 
-        # 5. 加载历史消息
-        history = await conversation_controller.get_messages(
-            conv.id, limit=DEFAULT_MAX_HISTORY_TURNS * 2, agent_friendly=True
-        )
-        logger.debug("bot get history")
-
-        # 6. 执行 Agent
+        # 5. 执行 Agent（checkpointer 自动管理上下文，无需手动传 history）
         start_time = time.time()
         result = await agent_instance.execute({
             "question": question,
-            "history": history,
+            "conversation_id": conv.id,
             "user_id": user.id,
             "agent_id": agent.id,
         })
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.debug("bot agent executed")
 
-        # 7. 保存消息记录
+        # 6. 保存消息记录（展示用，真实上下文由 checkpointer 管理）
         logger.debug("bot create user message")
         await ChatMessage.create(
             conversation_id=conv.id, type="user", content=question, feishu_message_id=None

@@ -129,6 +129,9 @@ _VISION_LLM_MAX_RETRIES = 2  # 额外重试次数
 # 全局信号量：限制 Vision LLM 并发数为 1，避免占用过多 QPS 额度
 _vision_llm_semaphore = asyncio.Semaphore(1)
 
+# 全局信号量：限制同时只处理 1 个 PDF，避免多文档并行时资源打满
+_pdf_processing_semaphore = asyncio.Semaphore(1)
+
 
 async def _call_vision_llm(
     image_bytes: bytes,
@@ -402,51 +405,52 @@ class PdfHandler(BaseFileHandler):
     """
 
     async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
-        page_data_list = await _pdf_extract_page_data(file_stream)
+        async with _pdf_processing_semaphore:
+            page_data_list = await _pdf_extract_page_data(file_stream)
 
-        if not page_data_list:
-            raise ConversionError("PDF 文件没有任何页面内容")
+            if not page_data_list:
+                raise ConversionError("PDF 文件没有任何页面内容")
 
-        total = len(page_data_list)
-        pages = []
-        for pd in page_data_list:
-            i = pd["page_num"]
-            img_bytes = pd["image_bytes"]
-            is_vision = pd["is_image_heavy"]
-            content_type = "vision_extracted" if is_vision else "text_extracted"
-            mode = "vision" if is_vision else "text"
-            logger.info(f"[PdfHandler] Processing page {i}/{total} ({mode})")
-            try:
-                if is_vision:
-                    page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
-                else:
-                    page_md = pd["text"]
+            total = len(page_data_list)
+            pages = []
+            for pd in page_data_list:
+                i = pd["page_num"]
+                img_bytes = pd["image_bytes"]
+                is_vision = pd["is_image_heavy"]
+                content_type = "vision_extracted" if is_vision else "text_extracted"
+                mode = "vision" if is_vision else "text"
+                logger.info(f"[PdfHandler] Processing page {i}/{total} ({mode})")
+                try:
+                    if is_vision:
+                        page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
+                    else:
+                        page_md = pd["text"]
 
-                pages.append(
-                    ConvertedPage(
-                        page_number=i,
-                        total_pages=total,
-                        content=page_md,
-                        content_type=content_type,
-                        source_file_type="pdf",
-                        metadata={"filename": filename},
-                        image_bytes=img_bytes,
+                    pages.append(
+                        ConvertedPage(
+                            page_number=i,
+                            total_pages=total,
+                            content=page_md,
+                            content_type=content_type,
+                            source_file_type="pdf",
+                            metadata={"filename": filename},
+                            image_bytes=img_bytes,
+                        )
                     )
-                )
-            except Exception as e:
-                logger.error(f"[PdfHandler] Page {i} failed: {e}")
-                pages.append(
-                    ConvertedPage(
-                        page_number=i,
-                        total_pages=total,
-                        content=f"> [页面处理失败: {str(e)}]",
-                        content_type=content_type,
-                        source_file_type="pdf",
-                        metadata={"filename": filename, "error": str(e)},
-                        image_bytes=img_bytes,
+                except Exception as e:
+                    logger.error(f"[PdfHandler] Page {i} failed: {e}")
+                    pages.append(
+                        ConvertedPage(
+                            page_number=i,
+                            total_pages=total,
+                            content=f"> [页面处理失败: {str(e)}]",
+                            content_type=content_type,
+                            source_file_type="pdf",
+                            metadata={"filename": filename, "error": str(e)},
+                            image_bytes=img_bytes,
+                        )
                     )
-                )
-        return pages
+            return pages
 
 
 class PptxHandler(BaseFileHandler):
