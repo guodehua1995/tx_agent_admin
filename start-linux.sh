@@ -162,6 +162,10 @@ do_stop() {
     kill -9 "$pid" 2>/dev/null
   fi
 
+  # 确保所有 uvicorn worker 子进程也被清理
+  pkill -f "uvicorn app:app" 2>/dev/null || true
+  sleep 1
+
   rm -f "$PID_FILE"
   echo "[OK] 已停止"
 }
@@ -169,6 +173,8 @@ do_stop() {
 do_restart() {
   do_stop
   sleep 1
+  # 清理旧字节码，避免多 worker 残留旧 pyc
+  find "$PROJECT_DIR" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
   do_start
 }
 
