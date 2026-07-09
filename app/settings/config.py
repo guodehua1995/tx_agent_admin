@@ -64,6 +64,11 @@ class Settings(BaseSettings):
             "timezone": "Asia/Shanghai",
         }
 
+    @property
+    def DB_URL(self) -> str:
+        """PostgreSQL 连接 URL（供 LangGraph checkpointer 等组件使用）"""
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
     DATETIME_FORMAT: str = "%Y-%m-%d %H:%M:%S"
 
     # 飞书
