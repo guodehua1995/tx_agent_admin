@@ -105,15 +105,13 @@ class BaseExtractor:
 
     @staticmethod
     async def _save_page_records(doc: Document, pages: list) -> None:
-        """保存页面截图并创建 DocumentPage 记录（仅当存在截图或多页时落库）
+        """保存页面记录到 DocumentPage 表（不再持久化截图，仅保留文本内容）
 
-        DocumentPage.screenshot_url 字段语义为"对象 key"（如 pages/doc_3/page_1.png），
-        前端展示前需经 file_storage.presign() 转换为可访问 URL。
+        DocumentPage.screenshot_url 字段始终为 None，不再保存页面截图到磁盘。
 
         幂等保障：写入前先按 document_id 清理旧记录，避免文档重试时
         撞 (document_id, page_number) 唯一约束。
         """
-        from app.services.file_storage import file_storage
 
         has_images = any(getattr(p, "image_bytes", None) for p in pages)
         if not has_images and len(pages) <= 1:
@@ -125,10 +123,8 @@ class BaseExtractor:
             logger.info(f"Page records cleared before re-save: doc_id={doc.id}, deleted={deleted}")
 
         for page in pages:
+            # 不再持久化页面截图，服务器容量有限，仅保留文本内容
             screenshot_key = None
-            if page.image_bytes:
-                key = BaseExtractor.page_screenshot_key(doc.id, page.page_number)
-                screenshot_key = await file_storage.save(key, page.image_bytes)
 
             await DocumentPage.create(
                 document_id=doc.id,
