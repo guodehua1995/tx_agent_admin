@@ -35,12 +35,6 @@ class Settings(BaseSettings):
     DB_NAME: str = "tx_agent_admin"
 
     @property
-    def DB_URL(self) -> str:
-        """psycopg / LangGraph checkpointer 使用的连接 URL"""
-        pwd = f":{self.DB_PASSWORD}" if self.DB_PASSWORD else ""
-        return f"postgresql://{self.DB_USER}{pwd}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-
-    @property
     def TORTOISE_ORM(self) -> dict:
         return {
             "connections": {
@@ -94,6 +88,12 @@ class Settings(BaseSettings):
     TOS_ACCESS_KEY: str = ""
     TOS_SECRET_KEY: str = ""
     TOS_BUCKET: str = ""
+
+    # 火山引擎 OCR（智能文档解析）
+    VOLC_AK: str = ""
+    VOLC_SK: str = ""
+    VOLC_OCR_MAX_RETRIES: int = 3       # OCR 失败最大重试次数
+    VOLC_OCR_RETRY_DELAY: float = 2.0   # 重试基础等待秒数
 
     # 飞书 IM 图片 image_key 缓存（避免同一截图重复上传）
     IMAGE_KEY_CACHE_BACKEND: str = "memory"  # memory | redis（redis 待实现）

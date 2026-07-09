@@ -10,7 +10,6 @@
 无需本地安装 LibreOffice。
 """
 
-import asyncio
 import csv
 import os
 from abc import ABC, abstractmethod
@@ -123,14 +122,8 @@ PPT页面通常包含标题、要点、图表、示意图、流程图等视觉�
 
 
 # Vision LLM 调用默认参数
-_VISION_LLM_TIMEOUT = 600  # 多模态单次调用超时（秒），复杂页面可能需要较长时间
+_VISION_LLM_TIMEOUT = 180  # 多模态单次调用超时（秒），图片理解较慢
 _VISION_LLM_MAX_RETRIES = 2  # 额外重试次数
-
-# 全局信号量：限制 Vision LLM 并发数为 1，避免占用过多 QPS 额度
-_vision_llm_semaphore = asyncio.Semaphore(1)
-
-# 全局信号量：限制同时只处理 1 个 PDF，避免多文档并行时资源打满
-_pdf_processing_semaphore = asyncio.Semaphore(1)
 
 
 async def _call_vision_llm(
@@ -154,6 +147,7 @@ async def _call_vision_llm(
     Returns:
         LLM 返回的 Markdown 文本
     """
+    import asyncio
     import base64
 
     from llama_index.core.llms import ChatMessage, ImageBlock, TextBlock
@@ -207,34 +201,33 @@ async def _call_vision_llm(
 
     last_err: BaseException | None = None
     total_attempts = max_retries + 1
-    async with _vision_llm_semaphore:
-        for attempt in range(1, total_attempts + 1):
-            try:
-                result = await asyncio.wait_for(_stream_collect(), timeout=timeout)
-                if not result:
-                    raise ConversionError("Vision LLM 返回空内容")
-                return result
-            except asyncio.TimeoutError as e:
-                last_err = e
-                err_repr = f"timeout({timeout}s)"
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                err_repr = repr(e)
+    for attempt in range(1, total_attempts + 1):
+        try:
+            result = await asyncio.wait_for(_stream_collect(), timeout=timeout)
+            if not result:
+                raise ConversionError("Vision LLM 返回空内容")
+            return result
+        except asyncio.TimeoutError as e:
+            last_err = e
+            err_repr = f"timeout({timeout}s)"
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            err_repr = repr(e)
 
-            if attempt < total_attempts:
-                backoff = min(2 ** (attempt - 1), 10)
-                logger.warning(
-                    f"[VisionLLM] page {page_num} call failed (attempt {attempt}/{total_attempts}, {err_repr}), retry in {backoff}ds"
-                )
-                await asyncio.sleep(backoff)
-            else:
-                logger.error(
-                    f"[VisionLLM] page {page_num} call exhausted retries ({total_attempts} attempts), last error: {err_repr}"
-                )
+        if attempt < total_attempts:
+            backoff = min(2 ** (attempt - 1), 10)
+            logger.warning(
+                f"[VisionLLM] page {page_num} call failed (attempt {attempt}/{total_attempts}, {err_repr}), retry in {backoff}ds"
+            )
+            await asyncio.sleep(backoff)
+        else:
+            logger.error(
+                f"[VisionLLM] page {page_num} call exhausted retries ({total_attempts} attempts), last error: {err_repr}"
+            )
 
-        raise ConversionError(
-            f"Vision LLM 调用失败 (page {page_num}, {total_attempts} attempts): {last_err}"
-        )
+    raise ConversionError(
+        f"Vision LLM 调用失败 (page {page_num}, {total_attempts} attempts): {last_err}"
+    )
 
 
 # ============================================================
@@ -298,47 +291,6 @@ async def _pdf_to_images_via_gotenberg(pdf_bytes: bytes) -> list[bytes]:
     return images
 
 
-# 提取文本字符数阈值：低于此值视为图片型页面，走 Vision LLM
-IMAGE_HEAVY_TEXT_THRESHOLD = 200
-
-
-async def _pdf_extract_page_data(pdf_bytes: bytes) -> list[dict]:
-    """从 PDF 逐页提取文本 + 渲染图片，标记是否为图片型页面。
-
-    返回 list[dict]:
-    - page_num: int 页码（从 1 开始）
-    - text: str PyMuPDF 提取的文本
-    - image_bytes: bytes 200 DPI PNG 渲染结果
-    - is_image_heavy: bool 文本过短（< IMAGE_HEAVY_TEXT_THRESHOLD），需走 Vision LLM
-    """
-    import fitz  # PyMuPDF
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pages = []
-    for i, page in enumerate(doc, start=1):
-        text = page.get_text("text").strip()
-        mat = fitz.Matrix(200 / 72, 200 / 72)
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
-
-        is_image_heavy = len(text) < IMAGE_HEAVY_TEXT_THRESHOLD
-        pages.append({
-            "page_num": i,
-            "text": text,
-            "image_bytes": img_bytes,
-            "is_image_heavy": is_image_heavy,
-        })
-    doc.close()
-
-    text_pages = sum(1 for p in pages if not p["is_image_heavy"])
-    image_pages = sum(1 for p in pages if p["is_image_heavy"])
-    logger.info(
-        f"[DocumentConverter] PDF extracted: total={len(pages)} "
-        f"text_pages={text_pages} image_pages={image_pages}"
-    )
-    return pages
-
-
 # ============================================================
 # Handler 基类
 # ============================================================
@@ -395,62 +347,45 @@ class DocxHandler(BaseFileHandler):
 
 
 class PdfHandler(BaseFileHandler):
-    """PDF 文件处理：文字页直接提取文本，图片页走 Vision LLM → Markdown
+    """PDF 文件处理：火山引擎 OCR 智能文档解析 → Markdown
 
-    策略：
-    - 逐页用 PyMuPDF 提取文本 + 渲染 PNG
-    - 文本 ≥ 200 字符 → 文字页，直接用提取的文本
-    - 文本 < 200 字符 → 图片页（扫描件/整页图片），走 Vision LLM
-    - 始终保留每页 PNG 以备 TOS 存储
+    通过 volc_ocr_service 调用火山引擎 ocr_pdf API，
+    自动分页批次处理，内置 QPS=2 限流和失败重试。
     """
 
     async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
-        async with _pdf_processing_semaphore:
-            page_data_list = await _pdf_extract_page_data(file_stream)
+        from app.services.volc_ocr_service import ocr_pdf_to_markdown
 
-            if not page_data_list:
-                raise ConversionError("PDF 文件没有任何页面内容")
+        if not file_stream:
+            raise ConversionError("PDF 文件为空")
 
-            total = len(page_data_list)
-            pages = []
-            for pd in page_data_list:
-                i = pd["page_num"]
-                img_bytes = pd["image_bytes"]
-                is_vision = pd["is_image_heavy"]
-                content_type = "vision_extracted" if is_vision else "text_extracted"
-                mode = "vision" if is_vision else "text"
-                logger.info(f"[PdfHandler] Processing page {i}/{total} ({mode})")
-                try:
-                    if is_vision:
-                        page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
-                    else:
-                        page_md = pd["text"]
+        logger.info(f"[PdfHandler] 使用火山引擎 OCR 解析: {filename}, size={len(file_stream)} bytes")
 
-                    pages.append(
-                        ConvertedPage(
-                            page_number=i,
-                            total_pages=total,
-                            content=page_md,
-                            content_type=content_type,
-                            source_file_type="pdf",
-                            metadata={"filename": filename},
-                            image_bytes=img_bytes,
-                        )
-                    )
-                except Exception as e:
-                    logger.error(f"[PdfHandler] Page {i} failed: {e}")
-                    pages.append(
-                        ConvertedPage(
-                            page_number=i,
-                            total_pages=total,
-                            content=f"> [页面处理失败: {str(e)}]",
-                            content_type=content_type,
-                            source_file_type="pdf",
-                            metadata={"filename": filename, "error": str(e)},
-                            image_bytes=img_bytes,
-                        )
-                    )
-            return pages
+        try:
+            full_markdown = await ocr_pdf_to_markdown(file_stream)
+        except Exception as e:
+            logger.error(f"[PdfHandler] 火山 OCR 解析失败: {e}")
+            raise ConversionError(f"火山引擎 OCR 解析失败: {e}") from e
+
+        if not full_markdown.strip():
+            full_markdown = "(PDF 文档内容为空)"
+
+        # 获取总页数用于元数据
+        import fitz
+        doc = fitz.open(stream=file_stream, filetype="pdf")
+        total_pages = len(doc)
+        doc.close()
+
+        return [
+            ConvertedPage(
+                page_number=1,
+                total_pages=total_pages,
+                content=full_markdown,
+                content_type="ocr_extracted",
+                source_file_type="pdf",
+                metadata={"filename": filename, "ocr_engine": "volcengine"},
+            )
+        ]
 
 
 class PptxHandler(BaseFileHandler):
