@@ -29,6 +29,10 @@ class LockKey(StrEnum):
     FEISHU_FOLDER_SCAN = "tx_agent:lock:feishu_folder_scan"
     # 标记该 Document 由飞书文件夹监听托管，补偿任务跳过
     FEISHU_FOLDER_INGEST = "tx_agent:lock:feishu_folder_ingest"
+    # OCR 全局互斥锁：跨 worker 确保同时只有一个 OCR 请求
+    OCR_GLOBAL = "tx_agent:lock:ocr_global"
+    # 向量化全局互斥锁：跨 worker 确保同时只有一个向量化任务
+    VECTORIZE_GLOBAL = "tx_agent:lock:vectorize_global"
 
 
 # ── 锁操作 ──────────────────────────────────────────────────────

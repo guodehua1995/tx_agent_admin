@@ -6,7 +6,7 @@
 核心特性：
 - 自适应 PDF 拆分策略（按 base64 大小选择批次页数：全量 → 10 → 5 → 2 → 1）
 - 单页超大 PDF 自动压缩（JPEG + 降 DPI）后继续调 OCR API
-- QPS=2 限流（asyncio.Semaphore 全局锁）
+- QPS=2 限流（Redis 分布式锁，跨 worker 互斥）
 - 失败自动重试（不修改数据，仅重试）
 - 多线程安全
 
@@ -21,11 +21,12 @@ from app.log import logger
 from app.settings import settings
 
 # ============================================================
-# 全局 QPS 限流器：严格串行，同时只允许 1 个 OCR 请求
-# OCR 服务 QPS=2 是服务端限制，但并发连接多仍会 Timeout，
-# 因此客户端保守设为 1，确保单文档逐批串行、不跨文档并发
+# 全局 OCR 互斥锁（Redis 分布式锁，跨 uvicorn worker 生效）
+# 确保多进程部署时同时只有一个 OCR 请求
 # ============================================================
-_ocr_semaphore = asyncio.Semaphore(1)
+_OCR_LOCK_KEY = "tx_agent:lock:ocr_global"
+_OCR_LOCK_TTL = 300  # 锁过期时间（秒），防止死锁
+_OCR_LOCK_POLL_INTERVAL = 1.0  # 等待锁时轮询间隔（秒）
 
 
 def _get_volc_credentials() -> tuple[str, str]:
@@ -198,70 +199,85 @@ async def _call_ocr_with_retry(
 ) -> str:
     """带限流和重试的 OCR 调用。
 
-    - 通过 Semaphore 限制同时只有 1 个请求（严格串行）
+    - 通过 Redis 分布式锁确保跨 worker 同时只有 1 个请求
     - 失败时不修改数据，仅重试
     - 重试间隔指数退避
 
     Returns:
         该批次的 markdown 字符串
     """
+    from app.core.redis import get_redis
+
     max_retries = settings.VOLC_OCR_MAX_RETRIES
     base_delay = settings.VOLC_OCR_RETRY_DELAY
+    redis = get_redis()
 
     for attempt in range(1, max_retries + 1):
-        # 仅在 API 调用瞬间持有信号量，重试等待时释放
-        async with _ocr_semaphore:
-            try:
-                resp = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    _call_ocr_pdf_sync,
-                    pdf_batch_bytes,
-                    page_start,
-                    page_num,
+        # 阻塞等待获取 Redis 分布式锁
+        token = None
+        try:
+            while True:
+                token = await redis.set(
+                    _OCR_LOCK_KEY, "1", nx=True, ex=_OCR_LOCK_TTL
+                )
+                if token:
+                    break
+                logger.debug(f"[VolcOCR] batch {batch_index} 等待 OCR 全局锁...")
+                await asyncio.sleep(_OCR_LOCK_POLL_INTERVAL)
+
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                _call_ocr_pdf_sync,
+                pdf_batch_bytes,
+                page_start,
+                page_num,
+            )
+
+            # 检查响应
+            if not resp or resp.get("code") != 10000:
+                error_msg = resp.get("message", "unknown error") if resp else "empty response"
+                raise RuntimeError(
+                    f"OCR API 返回错误: code={resp.get('code') if resp else 'N/A'}, "
+                    f"message={error_msg}"
                 )
 
-                # 检查响应
-                if not resp or resp.get("code") != 10000:
-                    error_msg = resp.get("message", "unknown error") if resp else "empty response"
-                    raise RuntimeError(
-                        f"OCR API 返回错误: code={resp.get('code') if resp else 'N/A'}, "
-                        f"message={error_msg}"
-                    )
+            data = resp.get("data")
+            if not data:
+                raise RuntimeError("OCR API 返回 data 为空")
 
-                data = resp.get("data")
-                if not data:
-                    raise RuntimeError("OCR API 返回 data 为空")
-
-                markdown = data.get("markdown", "")
-                if not markdown:
-                    logger.warning(
-                        f"[VolcOCR] batch {batch_index}: OCR 返回空 markdown，"
-                        f"可能该页无文字内容"
-                    )
-
-                logger.info(
-                    f"[VolcOCR] batch {batch_index} 成功: "
-                    f"pages={page_start + 1}-{page_start + page_num}, "
-                    f"markdown_len={len(markdown)}"
+            markdown = data.get("markdown", "")
+            if not markdown:
+                logger.warning(
+                    f"[VolcOCR] batch {batch_index}: OCR 返回空 markdown，"
+                    f"可能该页无文字内容"
                 )
-                return markdown
 
-            except Exception as e:
-                if attempt < max_retries:
-                    delay = base_delay * (2 ** (attempt - 1))
-                    logger.warning(
-                        f"[VolcOCR] batch {batch_index} 失败 "
-                        f"(attempt {attempt}/{max_retries}): {e}, "
-                        f"释放信号量, {delay}s 后重试"
-                    )
-                    # 信号量在 except 退出 async with 时自动释放
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(
-                        f"[VolcOCR] batch {batch_index} 重试耗尽 "
-                        f"({max_retries} attempts), 最后错误: {e}"
-                    )
-                    raise
+            logger.info(
+                f"[VolcOCR] batch {batch_index} 成功: "
+                f"pages={page_start + 1}-{page_start + page_num}, "
+                f"markdown_len={len(markdown)}"
+            )
+            return markdown
+
+        except Exception as e:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    f"[VolcOCR] batch {batch_index} 失败 "
+                    f"(attempt {attempt}/{max_retries}): {e}, "
+                    f"释放锁, {delay}s 后重试"
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    f"[VolcOCR] batch {batch_index} 重试耗尽 "
+                    f"({max_retries} attempts), 最后错误: {e}"
+                )
+                raise
+        finally:
+            # 释放 Redis 锁
+            if token:
+                await redis.delete(_OCR_LOCK_KEY)
 
 
 def _compress_oversized_page(pdf_bytes: bytes, max_base64_mb: float = 7.5) -> bytes:

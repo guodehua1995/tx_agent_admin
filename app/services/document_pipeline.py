@@ -34,28 +34,14 @@ from app.models.rag import DocumentSourceType
 from app.log import logger
 
 # ============================================================
-# 全局文档处理信号量：确保同时只有一个文档在执行 extract() 或 vectorize()
-# 所有入口（文件夹扫描、补偿任务、手动重试、审核通过）都受此控制
+# 全局文档处理 Redis 锁：确保同时只有一个文档在执行 extract() 或 vectorize()
+# 使用 Redis 分布式锁，跨 uvicorn worker 进程互斥
 # 避免 OCR / 切片 LLM / Embedding 并发请求导致 Timeout
 # ============================================================
-_extract_semaphore: asyncio.Semaphore | None = None
-_vectorize_semaphore: asyncio.Semaphore | None = None
-
-
-def _get_extract_semaphore() -> asyncio.Semaphore:
-    """懒获取提取信号量（首次调用时创建，避免模块加载时无事件循环）。"""
-    global _extract_semaphore
-    if _extract_semaphore is None:
-        _extract_semaphore = asyncio.Semaphore(1)
-    return _extract_semaphore
-
-
-def _get_vectorize_semaphore() -> asyncio.Semaphore:
-    """懒获取向量化信号量（首次调用时创建）。"""
-    global _vectorize_semaphore
-    if _vectorize_semaphore is None:
-        _vectorize_semaphore = asyncio.Semaphore(1)
-    return _vectorize_semaphore
+_EXTRACT_LOCK_KEY = "tx_agent:lock:extract_global"
+_VECTIMIZE_LOCK_KEY = "tx_agent:lock:vectorize_global"
+_GLOBAL_LOCK_TTL = 600  # 锁过期时间（秒），防止死锁
+_GLOBAL_LOCK_POLL_INTERVAL = 1.0  # 等待锁时轮询间隔（秒）
 
 
 def resolve_document_url(doc: Document) -> str | None:
@@ -136,11 +122,25 @@ class DocumentPipeline:
         入口状态: PENDING_EXTRACT | FAILED | REJECTED
         出口状态: PENDING_REVIEW | FAILED
 
-        通过全局信号量确保同时只有一个文档在执行提取，
+        通过 Redis 分布式锁确保跨 worker 同时只有一个文档在执行提取，
         避免 OCR 服务并发请求导致 Timeout。
         """
-        sem = _get_extract_semaphore()
-        async with sem:
+        from app.core.redis import get_redis
+
+        redis = get_redis()
+        global_token = None
+
+        # 阻塞等待获取全局提取锁
+        try:
+            while True:
+                global_token = await redis.set(
+                    _EXTRACT_LOCK_KEY, "1", nx=True, ex=_GLOBAL_LOCK_TTL
+                )
+                if global_token:
+                    break
+                logger.debug(f"[Extract] doc_id={doc_id} 等待全局提取锁...")
+                await asyncio.sleep(_GLOBAL_LOCK_POLL_INTERVAL)
+
             lock = RedisLock()
             lock_key = f"{LockKey.DOCUMENT_PROCESS}:{doc_id}"
             token = await lock.acquire(lock_key, ttl=self._EXTRACT_LOCK_TTL)
@@ -167,6 +167,9 @@ class DocumentPipeline:
                     logger.exception(f"Document extraction failed: id={doc_id}")
             finally:
                 await lock.release(lock_key, token)
+        finally:
+            if global_token:
+                await redis.delete(_EXTRACT_LOCK_KEY)
 
     async def approve(self, doc_id: int, reviewer_id: int | None = None) -> None:
         """审核通过 → APPROVED
@@ -240,11 +243,25 @@ class DocumentPipeline:
     async def vectorize(self, doc_id: int) -> None:
         """切片（如需要）→ 向量化入库 → COMPLETED
 
-        通过全局信号量确保同时只有一个文档在执行向量化/切片，
+        通过 Redis 分布式锁确保跨 worker 同时只有一个文档在执行向量化/切片，
         避免 LLM / Embedding 并发请求导致超时。
         """
-        sem = _get_vectorize_semaphore()
-        async with sem:
+        from app.core.redis import get_redis
+
+        redis = get_redis()
+        global_token = None
+
+        # 阻塞等待获取全局向量化锁
+        try:
+            while True:
+                global_token = await redis.set(
+                    _VECTIMIZE_LOCK_KEY, "1", nx=True, ex=_GLOBAL_LOCK_TTL
+                )
+                if global_token:
+                    break
+                logger.debug(f"[Vectorize] doc_id={doc_id} 等待全局向量化锁...")
+                await asyncio.sleep(_GLOBAL_LOCK_POLL_INTERVAL)
+
             lock = RedisLock()
             lock_key = f"{LockKey.DOCUMENT_VECTORIZE}:{doc_id}"
             token = await lock.acquire(lock_key, ttl=self._VECTORIZE_LOCK_TTL)
@@ -295,6 +312,9 @@ class DocumentPipeline:
                     logger.exception(f"Document vectorization failed: id={doc_id}")
             finally:
                 await lock.release(lock_key, token)
+        finally:
+            if global_token:
+                await redis.delete(_VECTIMIZE_LOCK_KEY)
 
     # ==================== 内部帮助方法 ====================
 
