@@ -501,6 +501,10 @@ class DocumentPipeline:
 
         # 创建 Contract
         document_url = resolve_document_url(doc)
+        # meta 中空字符串需转 None，兼容 Tortoise DatetimeField/DecimalField
+        signing_date = meta.get("signing_date") or None
+        expiry_date = meta.get("expiry_date") or None
+        total_amount = meta.get("total_amount") or None
         contract = await Contract.create(
             document_id=doc.id,
             contract_type_id=contract_type.id if contract_type else None,
@@ -509,9 +513,9 @@ class DocumentPipeline:
             project_name=doc.title,
             summary=doc.summary,
             document_url=document_url,
-            signing_date=meta.get("signing_date"),
-            expiry_date=meta.get("expiry_date"),
-            total_amount=meta.get("total_amount"),
+            signing_date=signing_date,
+            expiry_date=expiry_date,
+            total_amount=total_amount,
             clause_count=0,
         )
 
