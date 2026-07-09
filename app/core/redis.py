@@ -14,6 +14,7 @@ async def init_redis() -> aioredis.Redis:
     _redis_client = aioredis.from_url(
         settings.REDIS_URL,
         decode_responses=True,
+        max_connections=50,
     )
     # 验证连接
     await _redis_client.ping()

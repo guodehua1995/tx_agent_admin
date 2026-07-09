@@ -44,8 +44,14 @@ async def compensate_pending_extract():
 
     logger.info(f"[Compensate] Found {len(docs)} pending_extract documents")
 
-    # 过滤飞书文件夹托管的文档
-    managed = await asyncio.gather(*[_is_feishu_folder_managed(d.id) for d in docs])
+    # 过滤飞书文件夹托管的文档（限流 EXISTS 调用，避免 Redis 连接池耗尽）
+    sem = asyncio.Semaphore(max(settings.COMPENSATE_CONCURRENCY * 2, 10))
+
+    async def _check_managed(doc_id: int) -> bool:
+        async with sem:
+            return await _is_feishu_folder_managed(doc_id)
+
+    managed = await asyncio.gather(*[_check_managed(d.id) for d in docs])
     candidates = [d for d, is_managed in zip(docs, managed) if not is_managed]
 
     skipped = len(docs) - len(candidates)
@@ -86,8 +92,14 @@ async def compensate_approved():
 
     logger.info(f"[Compensate] Found {len(docs)} approved documents")
 
-    # 过滤飞书文件夹托管的文档
-    managed = await asyncio.gather(*[_is_feishu_folder_managed(d.id) for d in docs])
+    # 过滤飞书文件夹托管的文档（限流 EXISTS 调用，避免 Redis 连接池耗尽）
+    sem = asyncio.Semaphore(max(settings.COMPENSATE_CONCURRENCY * 2, 10))
+
+    async def _check_managed(doc_id: int) -> bool:
+        async with sem:
+            return await _is_feishu_folder_managed(doc_id)
+
+    managed = await asyncio.gather(*[_check_managed(d.id) for d in docs])
     candidates = [d for d, is_managed in zip(docs, managed) if not is_managed]
 
     skipped = len(docs) - len(candidates)
