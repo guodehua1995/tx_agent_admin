@@ -10,6 +10,7 @@
 无需本地安装 LibreOffice。
 """
 
+import asyncio
 import csv
 import os
 from abc import ABC, abstractmethod
@@ -150,7 +151,6 @@ async def _call_vision_llm(
     Returns:
         LLM 返回的 Markdown 文本
     """
-    import asyncio
     import base64
 
     from llama_index.core.llms import ChatMessage, ImageBlock, TextBlock
