@@ -41,12 +41,12 @@ class FeishuFolderScanService:
     # 单 watch 单次扫描最长允许时间（秒），防止锁泄漏 / 异常长任务挂死调度循环
     _SCAN_LOCK_TTL = 600
 
-    # 全局文档处理并发信号量：限制同时进行 process_document 的任务数
-    # 防止大批量扫描时同时拉飞书 API + LLM 导致 ConnectTimeout
-    @property
-    def _process_sem(self) -> asyncio.Semaphore:
-        """懒初始化，确保在事件循环启动后创建。"""
-        if not hasattr(self, "_process_sem_instance"):
+    def __init__(self):
+        self._process_sem_instance: asyncio.Semaphore | None = None
+
+    def _get_process_sem(self) -> asyncio.Semaphore:
+        """获取文档处理并发信号量（首次调用时懒初始化）。"""
+        if self._process_sem_instance is None:
             self._process_sem_instance = asyncio.Semaphore(
                 settings.FEISHU_FOLDER_PROCESS_CONCURRENCY
             )
@@ -468,7 +468,7 @@ class FeishuFolderScanService:
 
         所有状态转换由 DocumentPipeline 统一编排，本方法只负责提交任务和释放标记锁。
         """
-        async with self._process_sem:
+        async with self._get_process_sem():
             try:
                 await document_pipeline.extract(doc_id)
                 if watch.auto_approve:

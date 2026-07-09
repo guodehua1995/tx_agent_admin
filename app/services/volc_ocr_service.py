@@ -20,9 +20,11 @@ from app.log import logger
 from app.settings import settings
 
 # ============================================================
-# 全局 QPS 限流器：最多 2 个并发请求
+# 全局 QPS 限流器：严格串行，同时只允许 1 个 OCR 请求
+# OCR 服务 QPS=2 是服务端限制，但并发连接多仍会 Timeout，
+# 因此客户端保守设为 1，确保单文档逐批串行、不跨文档并发
 # ============================================================
-_ocr_semaphore = asyncio.Semaphore(2)
+_ocr_semaphore = asyncio.Semaphore(1)
 
 
 def _get_volc_credentials() -> tuple[str, str]:

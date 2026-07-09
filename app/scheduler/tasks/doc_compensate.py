@@ -80,6 +80,16 @@ async def compensate_pending_extract():
         try:
             logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
             await document_pipeline.extract(doc.id)
+
+            # 重新加载文档状态：extract 可能因 Redis 锁被占用而静默跳过
+            await doc.refresh_from_db()
+            if doc.status != DocumentStatus.PENDING_REVIEW:
+                logger.info(
+                    f"[Compensate] extract did not advance status, "
+                    f"skip auto-approve: doc_id={doc.id}, status={doc.status}"
+                )
+                continue
+
             # 提取成功后检查是否需要自动审批
             if await _should_auto_approve(doc):
                 logger.info(
