@@ -3,10 +3,10 @@
 import asyncio
 
 from app.core.redis_lock import LockKey, RedisLock
+from app.core.scheduler_lock import SCHEDULER_LOCK_TTL, reset_scheduler_lock, renew_scheduler_lock, set_scheduler_lock
 from app.log import logger
 from app.settings.config import settings
 
-from .scheduler_lock import SCHEDULER_LOCK_TTL, reset_scheduler_lock, renew_scheduler_lock, set_scheduler_lock
 from .tasks import get_all_tasks
 
 

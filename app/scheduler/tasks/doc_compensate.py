@@ -13,7 +13,7 @@ from app.core.redis_lock import LockKey
 from app.log import logger
 from app.models.enums import DocumentStatus
 from app.models.rag import Document, FeishuFolderWatch
-from app.scheduler.scheduler_lock import renew_scheduler_lock
+from app.core.scheduler_lock import renew_scheduler_lock
 from app.services.document_pipeline import document_pipeline
 
 # 中间态超时阈值（分钟）
