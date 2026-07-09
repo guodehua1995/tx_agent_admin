@@ -229,7 +229,7 @@ class ContractClauseController(CRUDBase[ContractClause, dict, dict]):
         return clause, list(prev_clauses), list(next_clauses)
 
     def _build_tree(self, clauses: list) -> list[dict]:
-        """构建条款树"""
+        """构建条款树，按 sort_order 排序"""
         clause_map = {c.id: c for c in clauses}
         roots = []
         for c in clauses:
@@ -240,6 +240,10 @@ class ContractClauseController(CRUDBase[ContractClause, dict, dict]):
                 parent._children.append(c)
             else:
                 roots.append(c)
+        # 每层子节点按 sort_order 排序
+        for c in clauses:
+            if hasattr(c, "_children"):
+                c._children.sort(key=lambda x: x.sort_order or 0)
         return roots
 
 

@@ -1,5 +1,5 @@
 <script setup>
-import { h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NButton,
@@ -45,7 +45,9 @@ const similarContracts = ref([])
 
 function buildClauseTree(clauses) {
   if (!clauses || clauses.length === 0) return []
-  return clauses.map((item) => ({
+  // 按 sort_order 排序，确保层级内顺序正确
+  const sorted = [...clauses].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  return sorted.map((item) => ({
     key: `clause-${item.id}`,
     label: `${item.clause_title || `条款 ${item.clause_index}`}`,
     children: item.children ? buildClauseTree(item.children) : [],
@@ -59,10 +61,10 @@ function buildClauseTree(clauses) {
   }))
 }
 
-function clauseTree() {
+const clauseTree = computed(() => {
   if (!contract.value?.clauses) return []
   return buildClauseTree(contract.value.clauses)
-}
+})
 
 const selectedClause = ref(null)
 const editing = ref(false)
@@ -314,9 +316,10 @@ onMounted(() => {
           <NGi :span="8">
             <NCard title="条款目录" size="small" style="max-height: 600px; overflow-y: auto">
               <NTree
-                v-if="clauseTree().length > 0"
-                :data="clauseTree()"
+                v-if="clauseTree.length > 0"
+                :data="clauseTree"
                 :default-expand-all="false"
+                :default-expanded-keys="[]"
                 selectable
                 block-line
                 @update:selected-keys="(keys, option) => handleNodeSelect(keys, option)"

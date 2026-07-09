@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
+from decimal import Decimal
 from typing import Optional
 
 from app.log import logger
@@ -81,15 +83,21 @@ def _build_md_anchor_section(level: Optional[int]) -> str:
     )
 
 
-META_EXTRACT_PROMPT = """你是合同解析助手。仅从以下合同的首部和尾部文本中提取签约主体信息。
+META_EXTRACT_PROMPT = """你是合同解析助手。仅从以下合同的首部和尾部文本中提取签约主体信息和关键签约数据。
+
+可选合同类型: {contract_types}
 
 返回 JSON（不要包裹代码块，不要任何额外说明）：
-{"party_a": "甲方简称", "party_b": "乙方简称", "contract_type": "采购|服务|技术合作|框架协议|劳动|租赁|其他"}
+{{"party_a": "甲方简称", "party_b": "乙方简称", "contract_type": "从可选合同类型中选择最匹配的一项", "signing_date": "YYYY-MM-DD", "expiry_date": "YYYY-MM-DD", "total_amount": 数字}}
 
 要求：
 1. 简称尽量精简（2~6 字），用于后续检索匹配，不含"有限公司"等通用后缀；
 2. 若文档中存在多个甲乙方，取主合同当事人；
-3. 若无法识别，对应字段填空字符串。"""
+3. contract_type 必须从上述「可选合同类型」中选择一项，若无法匹配则选"其他"；
+4. 若无法识别，对应字段填空字符串；
+5. signing_date 为合同签订日期，expiry_date 为合同到期日期，格式统一为 YYYY-MM-DD；
+6. total_amount 为合同总金额（数字，不含货币符号），如无法识别填 null；
+7. 若合同未明确约定到期日（如"长期有效"），expiry_date 填空字符串。"""
 
 
 STRUCTURE_PROMPT = """你是合同解析助手。分析以下合同片段，按顺序识别每个独立条款的起始位置。
@@ -203,6 +211,40 @@ def _extract_json(raw: str) -> str:
     return raw.strip()
 
 
+def _parse_date(date_str: str) -> Optional[datetime.datetime]:
+    """解析日期字符串为 datetime，支持多种格式；解析失败返回 None"""
+    if not date_str or not date_str.strip():
+        return None
+    date_str = date_str.strip()
+    # 常见日期格式
+    formats = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y年%m月%d日",
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+        "%Y-%m-%d %H:%M:%S",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_amount(amount_val) -> Optional[Decimal]:
+    """解析金额，返回 Decimal；解析失败返回 None"""
+    if amount_val is None:
+        return None
+    try:
+        val = Decimal(str(amount_val))
+        return val if val >= 0 else None
+    except Exception:
+        return None
+
+
 @register_handler("contract")
 class ContractSlicingHandler(BaseSlicingHandler):
     """合同文档切片处理器"""
@@ -292,18 +334,37 @@ class ContractSlicingHandler(BaseSlicingHandler):
         pages: Optional[list[DocumentPage]],
     ) -> dict:
         text = self._build_meta_input(raw_content, pages)
+        # 动态查询活跃合同类型，注入 prompt
+        contract_types = await self._get_active_contract_type_names()
+        prompt = META_EXTRACT_PROMPT.format(contract_types=contract_types)
         try:
-            raw = await self.call_llm(META_EXTRACT_PROMPT, text)
+            raw = await self.call_llm(prompt, text)
             data = json.loads(_extract_json(raw))
             return {
                 "party_a": data.get("party_a", "") or "",
                 "party_b": data.get("party_b", "") or "",
                 "contract_type": data.get("contract_type", "其他") or "其他",
+                "signing_date": _parse_date(data.get("signing_date", "")),
+                "expiry_date": _parse_date(data.get("expiry_date", "")),
+                "total_amount": _parse_amount(data.get("total_amount")),
             }
         except Exception as e:
             logger.exception("[contract] meta extraction failed")
             self._processing_warnings.append(f"元信息提取失败，需人工补充: {e}")
-            return {"party_a": "", "party_b": "", "contract_type": "其他"}
+            return {
+                "party_a": "", "party_b": "", "contract_type": "其他",
+                "signing_date": None, "expiry_date": None, "total_amount": None,
+            }
+
+    @staticmethod
+    async def _get_active_contract_type_names() -> str:
+        """查询活跃合同类型名称，拼接为 prompt 可用的枚举字符串"""
+        from app.models.contract import ContractType
+        types = await ContractType.filter(is_active=True, is_deleted=False).all()
+        names = [t.name for t in types if t.name]
+        if not names:
+            return "其他"
+        return "、".join(names) + "、其他"
 
     # ---------- 滑动窗口结构分析 ----------
 

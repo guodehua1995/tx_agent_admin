@@ -455,6 +455,9 @@ class DocumentPipeline:
             project_name=doc.title,
             summary=doc.summary,
             document_url=document_url,
+            signing_date=meta.get("signing_date"),
+            expiry_date=meta.get("expiry_date"),
+            total_amount=meta.get("total_amount"),
             clause_count=0,
         )
 
