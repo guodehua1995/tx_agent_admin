@@ -64,13 +64,12 @@ async def get_review_history(document_id: int = Query(..., description="文档ID
 @router.post("/approve", summary="通过审核")
 async def approve_document(
     review_in: ReviewSubmit,
-    background_tasks: BackgroundTasks,
 ):
     doc = await document_controller.get(id=review_in.document_id)
     if doc.status != DocumentStatus.PENDING_REVIEW:
         return Fail(msg="该文档不在待审核状态")
 
-    # 同步更新状态和创建审核记录，确保前端刷新可见
+    # 仅更新状态和创建审核记录，向量化由定时任务 compensate_approved 统一串行执行
     reviewer_id = CTX_USER_ID.get()
     if reviewer_id is not None:
         await review_controller.create({
@@ -83,13 +82,7 @@ async def approve_document(
     await doc.save()
     logger.info(f"Document approved: id={review_in.document_id}, reviewer_id={reviewer_id}")
 
-    # 向量化在后台执行
-    background_tasks.add_task(
-        document_pipeline.vectorize,
-        review_in.document_id,
-    )
-
-    return Success(msg="审核通过")
+    return Success(msg="审核通过，向量化将由定时任务执行")
 
 
 @router.post("/reject", summary="驳回审核")

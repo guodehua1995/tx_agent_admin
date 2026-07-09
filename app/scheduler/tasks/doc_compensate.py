@@ -104,9 +104,8 @@ async def compensate_pending_extract():
 async def compensate_approved():
     """补偿 approved 状态的文档：串行执行切片+向量化
 
-    - OCR 服务 QPS 有限，多文档并行会导致大量重试失败
-    - 因此改为串行：逐个处理，前一个完成后再处理下一个
-    - 飞书文件夹托管的文档（auto_approve 路径）同样跳过
+    - 所有 approved 文档（包括飞书文件夹托管的）统一由此任务处理向量化
+    - 串行执行：逐个处理，前一个完成后再处理下一个
     """
     docs = await Document.filter(
         status=DocumentStatus.APPROVED,
@@ -118,22 +117,8 @@ async def compensate_approved():
 
     logger.info(f"[Compensate] Found {len(docs)} approved documents")
 
-    # 过滤飞书文件夹托管的文档
-    candidates = []
-    for d in docs:
-        if not await _is_feishu_folder_managed(d.id):
-            candidates.append(d)
-
-    skipped = len(docs) - len(candidates)
-    if skipped:
-        logger.debug(f"[Compensate] Skipped {skipped} feishu-managed approved docs")
-    if not candidates:
-        return
-
-    logger.info(f"[Compensate] Compensating {len(candidates)} approved docs (serial)")
-
     # 串行执行：逐个处理
-    for doc in candidates:
+    for doc in docs:
         try:
             logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
             await document_pipeline.vectorize(doc.id)
