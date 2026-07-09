@@ -291,6 +291,47 @@ async def _pdf_to_images_via_gotenberg(pdf_bytes: bytes) -> list[bytes]:
     return images
 
 
+# 提取文本字符数阈值：低于此值视为图片型页面，走 Vision LLM
+IMAGE_HEAVY_TEXT_THRESHOLD = 200
+
+
+async def _pdf_extract_page_data(pdf_bytes: bytes) -> list[dict]:
+    """从 PDF 逐页提取文本 + 渲染图片，标记是否为图片型页面。
+
+    返回 list[dict]:
+    - page_num: int 页码（从 1 开始）
+    - text: str PyMuPDF 提取的文本
+    - image_bytes: bytes 200 DPI PNG 渲染结果
+    - is_image_heavy: bool 文本过短（< IMAGE_HEAVY_TEXT_THRESHOLD），需走 Vision LLM
+    """
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pages = []
+    for i, page in enumerate(doc, start=1):
+        text = page.get_text("text").strip()
+        mat = fitz.Matrix(200 / 72, 200 / 72)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+
+        is_image_heavy = len(text) < IMAGE_HEAVY_TEXT_THRESHOLD
+        pages.append({
+            "page_num": i,
+            "text": text,
+            "image_bytes": img_bytes,
+            "is_image_heavy": is_image_heavy,
+        })
+    doc.close()
+
+    text_pages = sum(1 for p in pages if not p["is_image_heavy"])
+    image_pages = sum(1 for p in pages if p["is_image_heavy"])
+    logger.info(
+        f"[DocumentConverter] PDF extracted: total={len(pages)} "
+        f"text_pages={text_pages} image_pages={image_pages}"
+    )
+    return pages
+
+
 # ============================================================
 # Handler 基类
 # ============================================================
@@ -347,27 +388,42 @@ class DocxHandler(BaseFileHandler):
 
 
 class PdfHandler(BaseFileHandler):
-    """PDF 文件处理：每页转图片 → Vision LLM → Markdown"""
+    """PDF 文件处理：文字页直接提取文本，图片页走 Vision LLM → Markdown
+
+    策略：
+    - 逐页用 PyMuPDF 提取文本 + 渲染 PNG
+    - 文本 ≥ 200 字符 → 文字页，直接用提取的文本
+    - 文本 < 200 字符 → 图片页（扫描件/整页图片），走 Vision LLM
+    - 始终保留每页 PNG 以备 TOS 存储
+    """
 
     async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
-        # PDF → 每页 PNG（通过 PyMuPDF 在内存中渲染）
-        page_images = await _pdf_to_images_via_gotenberg(file_stream)
+        page_data_list = await _pdf_extract_page_data(file_stream)
 
-        if not page_images:
+        if not page_data_list:
             raise ConversionError("PDF 文件没有任何页面内容")
 
-        total = len(page_images)
+        total = len(page_data_list)
         pages = []
-        for i, img_bytes in enumerate(page_images, start=1):
-            logger.info(f"[PdfHandler] Processing page {i}/{total}")
+        for pd in page_data_list:
+            i = pd["page_num"]
+            img_bytes = pd["image_bytes"]
+            is_vision = pd["is_image_heavy"]
+            content_type = "vision_extracted" if is_vision else "text_extracted"
+            mode = "vision" if is_vision else "text"
+            logger.info(f"[PdfHandler] Processing page {i}/{total} ({mode})")
             try:
-                page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
+                if is_vision:
+                    page_md = await _call_vision_llm(img_bytes, i, context="PDF文档")
+                else:
+                    page_md = pd["text"]
+
                 pages.append(
                     ConvertedPage(
                         page_number=i,
                         total_pages=total,
                         content=page_md,
-                        content_type="vision_extracted",
+                        content_type=content_type,
                         source_file_type="pdf",
                         metadata={"filename": filename},
                         image_bytes=img_bytes,
@@ -380,7 +436,7 @@ class PdfHandler(BaseFileHandler):
                         page_number=i,
                         total_pages=total,
                         content=f"> [页面处理失败: {str(e)}]",
-                        content_type="vision_extracted",
+                        content_type=content_type,
                         source_file_type="pdf",
                         metadata={"filename": filename, "error": str(e)},
                         image_bytes=img_bytes,
