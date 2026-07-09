@@ -1,9 +1,9 @@
 """文档处理流水线补偿任务
 
 扫描处于中间态的文档，通过 Redis 分布式锁协调后执行补偿。
+所有补偿任务串行执行，避免 OCR 服务并发冲突。
 """
 
-import asyncio
 from datetime import datetime, timedelta
 
 from tortoise.expressions import Q
@@ -14,7 +14,6 @@ from app.log import logger
 from app.models.enums import DocumentStatus
 from app.models.rag import Document, FeishuFolderWatch
 from app.services.document_pipeline import document_pipeline
-from app.settings import settings
 
 # 中间态超时阈值（分钟）
 STUCK_THRESHOLD_MINUTES = 30
@@ -46,10 +45,10 @@ async def _should_auto_approve(doc: Document) -> bool:
 
 
 async def compensate_pending_extract():
-    """补偿 pending_extract 状态的文档：并发执行提取流程
+    """补偿 pending_extract 状态的文档：串行执行提取流程
 
-    - 并发数由 settings.COMPENSATE_CONCURRENCY 控制，防止多文档同时提取压年事件循环
-    - 并发互斥交由 document_pipeline.extract 内部的 Redis 锁保证
+    - OCR 服务 QPS 有限，多文档并行会导致大量重试失败
+    - 因此改为串行：逐个处理，前一个完成后再处理下一个
     - 飞书文件夹托管的文档（FEISHU_FOLDER_INGEST 标记锁）会跳过
     """
     docs = await Document.filter(
@@ -62,15 +61,11 @@ async def compensate_pending_extract():
 
     logger.info(f"[Compensate] Found {len(docs)} pending_extract documents")
 
-    # 过滤飞书文件夹托管的文档（限流 EXISTS 调用，避免 Redis 连接池耗尽）
-    sem = asyncio.Semaphore(max(settings.COMPENSATE_CONCURRENCY * 2, 10))
-
-    async def _check_managed(doc_id: int) -> bool:
-        async with sem:
-            return await _is_feishu_folder_managed(doc_id)
-
-    managed = await asyncio.gather(*[_check_managed(d.id) for d in docs])
-    candidates = [d for d, is_managed in zip(docs, managed) if not is_managed]
+    # 过滤飞书文件夹托管的文档
+    candidates = []
+    for d in docs:
+        if not await _is_feishu_folder_managed(d.id):
+            candidates.append(d)
 
     skipped = len(docs) - len(candidates)
     if skipped:
@@ -78,33 +73,29 @@ async def compensate_pending_extract():
     if not candidates:
         return
 
-    logger.info(f"[Compensate] Compensating {len(candidates)} pending_extract docs (concurrency={settings.COMPENSATE_CONCURRENCY})")
+    logger.info(f"[Compensate] Compensating {len(candidates)} pending_extract docs (serial)")
 
-    sem = asyncio.Semaphore(settings.COMPENSATE_CONCURRENCY)
-
-    async def _run_one_extract(doc: Document):
-        async with sem:
-            try:
-                logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
-                await document_pipeline.extract(doc.id)
-                # 提取成功后检查是否需要自动审批（补偿重启前丢失的 auto_approve 逻辑）
-                if await _should_auto_approve(doc):
-                    logger.info(
-                        f"[Compensate] Auto-approving: doc_id={doc.id} "
-                        f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
-                    )
-                    await document_pipeline.approve(doc.id)
-            except Exception:
-                logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
-
-    await asyncio.gather(*[_run_one_extract(d) for d in candidates])
+    # 串行执行：逐个处理，避免 OCR 并发冲突
+    for doc in candidates:
+        try:
+            logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
+            await document_pipeline.extract(doc.id)
+            # 提取成功后检查是否需要自动审批
+            if await _should_auto_approve(doc):
+                logger.info(
+                    f"[Compensate] Auto-approving: doc_id={doc.id} "
+                    f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
+                )
+                await document_pipeline.approve(doc.id)
+        except Exception:
+            logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
 
 
 async def compensate_approved():
-    """补偿 approved 状态的文档：并发执行切片+向量化
+    """补偿 approved 状态的文档：串行执行切片+向量化
 
-    - 并发数由 settings.COMPENSATE_CONCURRENCY 控制
-    - 并发互斥交由 document_pipeline.vectorize 内部的 Redis 锁保证
+    - OCR 服务 QPS 有限，多文档并行会导致大量重试失败
+    - 因此改为串行：逐个处理，前一个完成后再处理下一个
     - 飞书文件夹托管的文档（auto_approve 路径）同样跳过
     """
     docs = await Document.filter(
@@ -117,15 +108,11 @@ async def compensate_approved():
 
     logger.info(f"[Compensate] Found {len(docs)} approved documents")
 
-    # 过滤飞书文件夹托管的文档（限流 EXISTS 调用，避免 Redis 连接池耗尽）
-    sem = asyncio.Semaphore(max(settings.COMPENSATE_CONCURRENCY * 2, 10))
-
-    async def _check_managed(doc_id: int) -> bool:
-        async with sem:
-            return await _is_feishu_folder_managed(doc_id)
-
-    managed = await asyncio.gather(*[_check_managed(d.id) for d in docs])
-    candidates = [d for d, is_managed in zip(docs, managed) if not is_managed]
+    # 过滤飞书文件夹托管的文档
+    candidates = []
+    for d in docs:
+        if not await _is_feishu_folder_managed(d.id):
+            candidates.append(d)
 
     skipped = len(docs) - len(candidates)
     if skipped:
@@ -133,19 +120,15 @@ async def compensate_approved():
     if not candidates:
         return
 
-    logger.info(f"[Compensate] Compensating {len(candidates)} approved docs (concurrency={settings.COMPENSATE_CONCURRENCY})")
+    logger.info(f"[Compensate] Compensating {len(candidates)} approved docs (serial)")
 
-    sem = asyncio.Semaphore(settings.COMPENSATE_CONCURRENCY)
-
-    async def _run_one_vectorize(doc: Document):
-        async with sem:
-            try:
-                logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
-                await document_pipeline.vectorize(doc.id)
-            except Exception:
-                logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
-
-    await asyncio.gather(*[_run_one_vectorize(d) for d in candidates])
+    # 串行执行：逐个处理
+    for doc in candidates:
+        try:
+            logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
+            await document_pipeline.vectorize(doc.id)
+        except Exception:
+            logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
 
 
 async def reset_stuck_documents():

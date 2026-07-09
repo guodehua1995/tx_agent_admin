@@ -98,6 +98,7 @@ export default {
   scanFeishuFolderNow: (params = {}) => request.post('/feishu_folder/scan_now', null, { params }),
   getFeishuFolderFiles: (params = {}) => request.get('/feishu_folder/files', { params }),
   cleanupFeishuFolderFile: (params = {}) => request.post('/feishu_folder/files/cleanup', null, { params }),
+  retryFeishuFolderFile: (params = {}) => request.post('/feishu_folder/files/retry', null, { params }),
   // Doc Template
   getDocTemplateList: (params = {}) => request.get('/doc_template/list', { params }),
   getDocTemplate: (params = {}) => request.get('/doc_template/get', { params }),

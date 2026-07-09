@@ -166,6 +166,23 @@ async function handleCleanupFile(row) {
   }
 }
 
+// ========== 重试失败文件 ==========
+const retryingTokens = ref(new Set())
+
+async function handleRetryFile(row) {
+  if (retryingTokens.value.has(row.file_token)) return
+  retryingTokens.value.add(row.file_token)
+  try {
+    await api.retryFeishuFolderFile({ folder_id: currentFolder.value.id, file_token: row.file_token })
+    $message.success('已加入重试队列，稍后刷新查看结果')
+    setTimeout(() => loadFiles(), 2000)
+  } catch (e) {
+    $message.error(e.message || '重试请求失败')
+  } finally {
+    retryingTokens.value.delete(row.file_token)
+  }
+}
+
 // ========== 文件清单 Drawer ==========
 const filesDrawerVisible = ref(false)
 const filesLoading = ref(false)
@@ -286,22 +303,47 @@ const fileColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 100,
+    width: 140,
     align: 'center',
     render(row) {
-      if (row.ingest_status !== 'feishu_deleted') return h('span', '-')
-      return h(
-        NPopconfirm,
-        { onPositiveClick: () => handleCleanupFile(row) },
-        {
-          trigger: () => h(
-            NButton,
-            { size: 'small', type: 'error', quaternary: true },
-            { default: () => '清理', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
-          ),
-          default: () => h('div', {}, `确定清理该文件？将删除关联文档及向量数据。`),
-        }
-      )
+      const btns = []
+      // 飞书已删除 → 清理按钮
+      if (row.ingest_status === 'feishu_deleted') {
+        btns.push(
+          h(
+            NPopconfirm,
+            { onPositiveClick: () => handleCleanupFile(row) },
+            {
+              trigger: () => h(
+                NButton,
+                { size: 'small', type: 'error', quaternary: true },
+                { default: () => '清理', icon: renderIcon('material-symbols:delete-outline', { size: 16 }) }
+              ),
+              default: () => h('div', {}, '确定清理该文件？将删除关联文档及向量数据。'),
+            }
+          )
+        )
+      }
+      // 失败状态 → 重试按钮
+      const isFailed = row.ingest_status === 'failed' || row.doc_status === 'failed'
+      if (isFailed && row.file_token) {
+        const isRetrying = retryingTokens.value.has(row.file_token)
+        btns.push(
+          h(
+            NPopconfirm,
+            { onPositiveClick: () => handleRetryFile(row) },
+            {
+              trigger: () => h(
+                NButton,
+                { size: 'small', type: 'warning', quaternary: true, loading: isRetrying },
+                { default: () => '重试', icon: renderIcon('material-symbols:refresh', { size: 16 }) }
+              ),
+              default: () => h('div', {}, '将清除旧文档数据并重新提取，确定重试？'),
+            }
+          )
+        )
+      }
+      return btns.length ? btns : h('span', '-')
     },
   },
 ]

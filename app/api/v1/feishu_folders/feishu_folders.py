@@ -207,3 +207,18 @@ async def cleanup_deleted_file(
     except ValueError as e:
         return Fail(msg=str(e))
     return Success(msg="清理完成")
+
+
+@router.post("/files/retry", summary="重试失败的文件夹监听文件")
+async def retry_file(
+    folder_id: int = Query(..., description="文件夹监听ID"),
+    file_token: str = Query(..., description="飞书文件token"),
+    background_tasks: BackgroundTasks = None,
+):
+    """手动重试：清理旧文档关联数据 → 重建 Document → 重新走提取流水线。"""
+    try:
+        new_doc_id = await feishu_folder_scan_service.retry_file(folder_id, file_token)
+    except Exception as e:
+        logger.exception(f"[FeishuFolder] retry failed: folder_id={folder_id}, token={file_token}")
+        return Fail(msg=str(e))
+    return Success(msg="已加入重试队列", data={"document_id": new_doc_id})
