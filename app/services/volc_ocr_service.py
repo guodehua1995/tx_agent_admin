@@ -78,7 +78,7 @@ def _split_pdf(pdf_bytes: bytes, pages_per_batch: int) -> list[tuple[bytes, int]
         batch_doc.close()
 
         raw_batches.append((start, end, batch_bytes))
-        logger.info(
+        logger.debug(
             f"[VolcOCR] PDF batch: pages {start + 1}-{end}/{total_pages}, "
             f"size={len(batch_bytes) / 1024:.1f}KB"
         )
@@ -128,7 +128,7 @@ def _determine_batch_size(pdf_bytes: bytes, total_pages: int) -> int:
     b64_size = len(base64.b64encode(pdf_bytes))
 
     if b64_size < _MAX_BASE64_SIZE:
-        logger.info(
+        logger.debug(
             f"[VolcOCR] PDF base64={b64_size / 1024 / 1024:.2f}MB < 5MB, "
             f"整份发送不拆分"
         )
@@ -142,7 +142,7 @@ def _determine_batch_size(pdf_bytes: bytes, total_pages: int) -> int:
         # 估算：按总大小等比缩放到每批
         estimated_batch_b64 = b64_size * tier / total_pages
         if estimated_batch_b64 < _MAX_BASE64_SIZE:
-            logger.info(
+            logger.debug(
                 f"[VolcOCR] PDF base64={b64_size / 1024 / 1024:.2f}MB, "
                 f"total_pages={total_pages}, 选择 batch_size={tier}"
             )
@@ -256,7 +256,7 @@ async def _call_ocr_with_retry(
                     f"可能该页无文字内容"
                 )
 
-            logger.info(
+            logger.debug(
                 f"[VolcOCR] batch {batch_index} 成功: "
                 f"pages={page_start + 1}-{page_start + page_num}, "
                 f"markdown_len={len(markdown)}"
@@ -390,14 +390,14 @@ async def ocr_pdf_to_markdown(pdf_bytes: bytes) -> str:
     # 自适应确定每批页数
     batch_size = _determine_batch_size(pdf_bytes, total_pages)
 
-    logger.info(
+    logger.debug(
         f"[VolcOCR] 开始解析 PDF: total_pages={total_pages}, "
         f"batch_size={batch_size}, file_size={len(pdf_bytes) / 1024:.1f}KB"
     )
 
     # 拆分 PDF（每个批次包含实际页数可能因递归拆分而不同）
     batches = _split_pdf(pdf_bytes, batch_size)
-    logger.info(f"[VolcOCR] 共 {len(batches)} 个批次待处理")
+    logger.debug(f"[VolcOCR] 共 {len(batches)} 个批次待处理")
 
     # 逐批处理（受 Semaphore 限流，严格串行）
     all_markdowns: list[str] = []

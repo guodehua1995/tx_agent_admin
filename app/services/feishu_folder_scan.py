@@ -68,7 +68,7 @@ class FeishuFolderScanService:
         if not watches:
             return
 
-        logger.info(f"[FeishuFolderScan] {len(watches)} active watches")
+        logger.debug(f"[FeishuFolderScan] {len(watches)} active watches")
 
         due_watches = [w for w in watches if self._should_scan_now(w)]
         if not due_watches:

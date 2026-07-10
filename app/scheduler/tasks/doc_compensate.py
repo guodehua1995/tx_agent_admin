@@ -85,7 +85,7 @@ async def compensate_pending_extract():
 
         # 提取成功后检查是否需要自动审批
         if await _should_auto_approve(doc):
-            logger.info(
+            logger.debug(
                 f"[Compensate] Auto-approving: doc_id={doc.id} "
                 f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
             )
@@ -103,7 +103,7 @@ async def compensate_approved():
     docs = await Document.filter(
         status=DocumentStatus.APPROVED,
         is_deleted=False,
-    ).all()
+    ).only("id").all()
 
     if not docs:
         return

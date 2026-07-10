@@ -359,7 +359,7 @@ class PdfHandler(BaseFileHandler):
         if not file_stream:
             raise ConversionError("PDF 文件为空")
 
-        logger.info(f"[PdfHandler] 使用火山引擎 OCR 解析: {filename}, size={len(file_stream)} bytes")
+        logger.debug(f"[PdfHandler] 使用火山引擎 OCR 解析: {filename}, size={len(file_stream)} bytes")
 
         try:
             full_markdown = await ocr_pdf_to_markdown(file_stream)
@@ -681,7 +681,7 @@ class DocumentConverter:
         pages = await handler.handle(file_stream, filename)
 
         logger.info(
-            f"[DocumentConverter] Conversion complete: {len(pages)} pages extracted"
+            f"[DocumentConverter] Conversion complete: {len(pages)} pages extracted from {filename}"
         )
         return pages
 

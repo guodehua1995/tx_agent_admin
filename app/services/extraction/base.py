@@ -64,7 +64,7 @@ class BaseExtractor:
             access_token = await self._get_feishu_access_token()
             file_bytes, filename = await feishu_service.download_file(doc_token, access_token)
             ext = Path(filename).suffix.lstrip(".").lower()
-            logger.info(f"Feishu file downloaded: token={doc_token}, filename={filename}, size={len(file_bytes)}")
+            logger.debug(f"Feishu file downloaded: token={doc_token}, filename={filename}, size={len(file_bytes)}")
             return file_bytes, filename, ext
 
         if doc.source_type == DocumentSourceType.FILE_UPLOAD:

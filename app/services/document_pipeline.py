@@ -159,7 +159,7 @@ class DocumentPipeline:
                     await doc.save()
                     doc.status = DocumentStatus.PENDING_REVIEW
                     await doc.save()
-                    logger.info(f"Document extracted: id={doc_id}, status=pending_review")
+                    logger.debug(f"Document extracted: id={doc_id}, status=pending_review")
                 except Exception as e:
                     doc.status = DocumentStatus.FAILED
                     doc.error_message = str(e)
@@ -191,7 +191,7 @@ class DocumentPipeline:
 
         doc.status = DocumentStatus.APPROVED
         await doc.save()
-        logger.info(f"Document approved: id={doc_id}, reviewer_id={reviewer_id}")
+        logger.debug(f"Document approved: id={doc_id}, reviewer_id={reviewer_id}")
 
     async def reject(self, doc_id: int, reviewer_id: int, comment: str) -> None:
         """驳回 → REJECTED"""
@@ -513,6 +513,7 @@ class DocumentPipeline:
                     clause_index=int(clause["clause_index"]),
                     clause_title=clause.get("clause_title"),
                 )
+                
                 llama_docs.append(LlamaDocument(
                     text=text, metadata=clause_meta.to_dict(),
                 ))
