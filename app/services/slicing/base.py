@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from typing import Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -15,6 +16,16 @@ T = TypeVar("T", bound=BaseModel)
 # LLM 调用默认参数
 DEFAULT_LLM_TIMEOUT = 120     # 单次调用超时（秒）
 DEFAULT_LLM_MAX_RETRIES = 2   # 额外重试次数（总尝试 = 1 + retries）
+
+# 控制字符正则：保留 \t \n \r，移除其余 C0/C1 控制字符
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+def _sanitize_user_content(text: str) -> str:
+    """清除 user_content 中的控制字符，防止透传到 LLM JSON 输出导致解析失败。"""
+    if not text:
+        return text
+    return _CONTROL_CHARS_RE.sub('', text)
 
 
 class LLMCallError(RuntimeError):
@@ -59,6 +70,8 @@ class BaseSlicingHandler:
         """
         from llama_index.core.llms import ChatMessage as LiChatMessage
         from llama_index.llms.openai_like import OpenAILike
+
+        user_content = _sanitize_user_content(user_content)
 
         extra = self.model_config.extra_config or {}
         llm = OpenAILike(
@@ -137,6 +150,8 @@ class BaseSlicingHandler:
         """
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import SystemMessage, HumanMessage
+
+        user_content = _sanitize_user_content(user_content)
 
         config = self.lite_model_config if use_lite else self.model_config
         extra = config.extra_config or {}

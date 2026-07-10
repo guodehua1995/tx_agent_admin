@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import re
 import time
 
 from app.controllers.ai_config import ai_config_controller
@@ -43,6 +44,16 @@ _VECTIMIZE_SEMAPHORE_KEY = "tx_agent:lock:vectorize_global:count"
 _VECTIMIZE_MAX_CONCURRENT = 2  # 向量化最大并发数
 _GLOBAL_LOCK_TTL = 600  # 锁过期时间（秒），防止死锁
 _GLOBAL_LOCK_POLL_INTERVAL = 1.0  # 等待锁时轮询间隔（秒）
+
+# 控制字符正则：保留 \t \n \r，移除其余 C0/C1 控制字符
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+def _sanitize_text(text: str) -> str:
+    """清除文本中的控制字符，避免透传到 LLM JSON 输出时导致解析失败。"""
+    if not text:
+        return text
+    return _CONTROL_CHARS_RE.sub('', text)
 
 
 def resolve_document_url(doc: Document) -> str | None:
@@ -153,7 +164,7 @@ class DocumentPipeline:
                 doc = await Document.get(id=doc_id)
                 try:
                     result = await run_extraction(doc)
-                    doc.content = result.content
+                    doc.content = _sanitize_text(result.content or "")
                     if result.source_meta_patch:
                         doc.source_meta = {**(doc.source_meta or {}), **result.source_meta_patch}
                     doc.status = DocumentStatus.EXTRACTED

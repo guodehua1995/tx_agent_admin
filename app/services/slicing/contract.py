@@ -25,6 +25,16 @@ from app.models.rag import DocumentPage
 from . import SlicingResult, register_handler
 from .base import BaseSlicingHandler, LLMCallError
 
+# 控制字符正则：保留 \t \n \r，移除其余 C0/C1 控制字符
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+def _sanitize_text(text: str) -> str:
+    """清除文本中的控制字符，避免透传到 LLM JSON 输出时导致解析失败。"""
+    if not text:
+        return text
+    return _CONTROL_CHARS_RE.sub('', text)
+
 
 # ── Pydantic 响应模型（用于 LangChain with_structured_output）──────────────
 
@@ -327,6 +337,9 @@ class ContractSlicingHandler(BaseSlicingHandler):
         # 重置 warning 收集器（handler 实例可能被复用）
         self._processing_warnings = []
         logger.debug("[contract] slicing started")
+
+        # 清除控制字符，防止透传到 LLM JSON 输出导致解析失败
+        raw_content = _sanitize_text(raw_content)
 
         # 1. 元信息提取（独立 1 次调用，输入仅前后 N 页）
         meta = await self._extract_meta(raw_content, pages)
@@ -806,6 +819,8 @@ class ContractSlicingHandler(BaseSlicingHandler):
                     f"条款「{clause.get('clause_title') or ''}」明细数据摘要失败，保留原文: {e}"
                 )
         return clauses
+
+        
 
     # ---------- 概要 ----------
 
