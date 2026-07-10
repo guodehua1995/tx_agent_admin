@@ -39,7 +39,8 @@ from app.log import logger
 # 避免 OCR / 切片 LLM / Embedding 并发请求导致 Timeout
 # ============================================================
 _EXTRACT_LOCK_KEY = "tx_agent:lock:extract_global"
-_VECTIMIZE_LOCK_KEY = "tx_agent:lock:vectorize_global"
+_VECTIMIZE_SEMAPHORE_KEY = "tx_agent:lock:vectorize_global:count"
+_VECTIMIZE_MAX_CONCURRENT = 2  # 向量化最大并发数
 _GLOBAL_LOCK_TTL = 600  # 锁过期时间（秒），防止死锁
 _GLOBAL_LOCK_POLL_INTERVAL = 1.0  # 等待锁时轮询间隔（秒）
 
@@ -251,15 +252,16 @@ class DocumentPipeline:
         redis = get_redis()
         global_token = None
 
-        # 阻塞等待获取全局向量化锁
+        # 阻塞等待获取全局向量化信号量（允许 _VECTIMIZE_MAX_CONCURRENT 个并发）
         try:
             while True:
-                global_token = await redis.set(
-                    _VECTIMIZE_LOCK_KEY, "1", nx=True, ex=_GLOBAL_LOCK_TTL
-                )
-                if global_token:
+                current = await redis.incr(_VECTIMIZE_SEMAPHORE_KEY)
+                if current <= _VECTIMIZE_MAX_CONCURRENT:
+                    await redis.expire(_VECTIMIZE_SEMAPHORE_KEY, _GLOBAL_LOCK_TTL)
+                    global_token = str(current)  # 非空表示已获取
                     break
-                logger.debug(f"[Vectorize] doc_id={doc_id} 等待全局向量化锁...")
+                await redis.decr(_VECTIMIZE_SEMAPHORE_KEY)
+                logger.debug(f"[Vectorize] doc_id={doc_id} 等待全局向量化槽位...")
                 await asyncio.sleep(_GLOBAL_LOCK_POLL_INTERVAL)
 
             lock = RedisLock()
@@ -314,7 +316,7 @@ class DocumentPipeline:
                 await lock.release(lock_key, token)
         finally:
             if global_token:
-                await redis.delete(_VECTIMIZE_LOCK_KEY)
+                await redis.decr(_VECTIMIZE_SEMAPHORE_KEY)
 
     # ==================== 内部帮助方法 ====================
 
@@ -409,14 +411,22 @@ class DocumentPipeline:
         if slicing:
             slicing_json = slicing.sliced_content
         if not slicing_json:
-            raise ValueError("合同文档缺少切片内容，请先完成审核")
+            raise ValueError("文档缺少切片内容，请先完成审核")
 
         try:
             data = json.loads(slicing_json)
         except json.JSONDecodeError as e:
-            raise ValueError(f"合同切片内容不是合法 JSON: {e}")
+            raise ValueError(f"切片内容不是合法 JSON: {e}")
 
+        is_contract = data.get("is_contract", True)
         meta = data.get("meta") or {}
+
+        if not is_contract:
+            # 非合同文档：只保存摘要 + 正文到向量库
+            await self._vectorize_non_contract(doc, kb, data, meta)
+            return
+
+        # 合同文档：条款级向量化
         clauses = data.get("clauses") or []
         if not clauses:
             raise ValueError("合同解析后无有效条款")
@@ -531,6 +541,103 @@ class DocumentPipeline:
 
         # 保存到 Contract / ContractClause 表
         await self._save_contract_from_slicing(doc, meta, clauses)
+
+    async def _vectorize_non_contract(
+        self, doc: Document, kb: KnowledgeBase, data: dict, meta: dict,
+    ):
+        """非合同文档向量化：创建 Contract(类型=其它) + clause 0 概要，摘要+正文分块入库。"""
+        from llama_index.core.ingestion import IngestionPipeline
+        from llama_index.core.schema import Document as LlamaDocument
+        from app.services.llm_builder import build_embed_model
+
+        embedding_config = await LLMProviderConfig.get(id=kb.embedding_model_id)
+        embed_model = build_embed_model(embedding_config)
+
+        summary = (data.get("summary") or "").strip()
+        body_text = (data.get("body_text") or "").strip()
+
+        # 保存摘要到 doc.summary
+        if summary:
+            doc.summary = summary
+            await doc.save(update_fields=["summary"])
+
+        # 填充 meta 缺省值，确保 Contract 可创建
+        contract_type = meta.get("contract_type") or "其他"
+        party_a = meta.get("party_a") or ""
+        party_b = meta.get("party_b") or ""
+
+        # 创建 Contract + ContractClause（clause 0 = 文档概要）
+        clauses = [{
+            "clause_index": 0,
+            "clause_title": "文档概要",
+            "content": summary or body_text[:500] if body_text else "(无内容)",
+        }]
+        await self._save_contract_from_slicing(doc, meta, clauses)
+
+        llama_docs: list[LlamaDocument] = []
+        chunk_count = 0
+
+        # 摘要 chunk（使用合同条款元数据，clause_index=0）
+        if summary:
+            header = (
+                f"[合同: {doc.title} | "
+                f"甲方: {party_a} | "
+                f"乙方: {party_b} | "
+                f"类型: {contract_type}] | "
+                f"条款 文档概要"
+            )
+            text = f"{header}\n{summary}"
+            clause_meta = ContractMetadata(
+                title=doc.title, source_type=doc.source_type,
+                knowledge_base_id=str(kb.id), source_doc_id=str(doc.id),
+                doc_type_code=doc.doc_type_code,
+                party_a=party_a, party_b=party_b,
+                contract_type=contract_type,
+                clause_index=0, clause_title="文档概要",
+            )
+            llama_docs.append(LlamaDocument(
+                text=text, metadata=clause_meta.to_dict(),
+            ))
+            chunk_count += 1
+
+        # 正文按段落切分（同样挂 clause_index=0）
+        if body_text:
+            sub_chunks = _split_clause_content(body_text, max_chars=500)
+            for sub_text in sub_chunks:
+                header = (
+                    f"[合同: {doc.title} | "
+                    f"甲方: {party_a} | "
+                    f"乙方: {party_b} | "
+                    f"类型: {contract_type}] | "
+                    f"条款 文档概要"
+                )
+                text = f"{header}\n{sub_text}"
+                clause_meta = ContractMetadata(
+                    title=doc.title, source_type=doc.source_type,
+                    knowledge_base_id=str(kb.id), source_doc_id=str(doc.id),
+                    doc_type_code=doc.doc_type_code,
+                    party_a=party_a, party_b=party_b,
+                    contract_type=contract_type,
+                    clause_index=0, clause_title="文档概要",
+                )
+                llama_docs.append(LlamaDocument(
+                    text=text, metadata=clause_meta.to_dict(),
+                ))
+                chunk_count += 1
+
+        if not llama_docs:
+            logger.warning(f"Non-contract document has no content to vectorize: doc_id={doc.id}")
+            return
+
+        pipeline = IngestionPipeline(
+            transformations=[embed_model],
+            vector_store=rag_service._vector_store,
+        )
+        await pipeline.arun(documents=llama_docs)
+        logger.info(
+            f"Non-contract document vectorized as contract(其它): doc_id={doc.id}, "
+            f"chunks={chunk_count}, has_summary={bool(summary)}"
+        )
 
     async def _save_contract_from_slicing(
         self, doc: Document, meta: dict, clauses: list[dict],

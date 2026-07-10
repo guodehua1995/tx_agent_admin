@@ -215,7 +215,7 @@ async def retry_file(
     file_token: str = Query(..., description="飞书文件token"),
     background_tasks: BackgroundTasks = None,
 ):
-    """手动重试：清理旧文档关联数据 → 重建 Document → 重新走提取流水线。"""
+    """手动重试：清理旧文档 → 重置为 pending → 下次扫描循环统一处理。"""
     try:
         new_doc_id = await feishu_folder_scan_service.retry_file(folder_id, file_token)
     except Exception as e:

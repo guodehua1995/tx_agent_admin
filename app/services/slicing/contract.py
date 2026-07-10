@@ -57,12 +57,44 @@ class ContentResponse(BaseModel):
     content: str = Field(default="", description="处理后的文本内容")
 
 
+class SummaryResponse(BaseModel):
+    """合同概要 + 合同判断"""
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+    summary: str = Field(default="", description="文档内容概要，200~400字")
+    is_contract: bool = Field(default=False, description="该文档是否为合同/协议类法律文书")
+
+
 # 滑动窗口配置
 WINDOW_SIZE = 5000          # 每轮送入 LLM 的字符数
 MIN_PROGRESS = 500          # 兜底推进字符数（防死循环）
 META_PAGES_HEAD = 2         # 元信息提取：取前 N 页
 META_PAGES_TAIL = 2         # 元信息提取：取后 N 页
 SUMMARY_CONTEXT_CLAUSES = 5 # 概要生成：取前 N 条作为上下文
+MAX_INPUT_CHARS = 3000      # 单次 LLM 输入上限（字符数），超长在完整语句边界截断
+
+# 句子边界字符（用于截断时定位完整语句结尾）
+_SENTENCE_BOUNDARIES = '。\n；？！.?;!'
+
+
+def _truncate_at_sentence_boundary(text: str, max_chars: int = MAX_INPUT_CHARS) -> str:
+    """截断文本到 max_chars 以内，在完整语句边界（句号/换行等）处截断。
+
+    若找不到句子边界，则硬截断。
+    """
+    if len(text) <= max_chars:
+        return text
+
+    truncated = text[:max_chars]
+    best_pos = -1
+    for boundary in _SENTENCE_BOUNDARIES:
+        pos = truncated.rfind(boundary)
+        if pos > best_pos:
+            best_pos = pos
+
+    if best_pos > 0:
+        return truncated[:best_pos + 1]
+    # 找不到句子边界，硬截断
+    return truncated
 
 # Markdown 标题正则：行首 1~6 个 # 后跟空格再跟非空字符，避免误匹配 #include / 颜色码 #fff 之类
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+\S", re.MULTILINE)
@@ -231,11 +263,17 @@ DATA_SUMMARIZE_PROMPT = """你是合同解析助手。以下条款中包含大�
 {"content": "处理后的条款文本（明细数据已替换为摘要描述）"}"""
 
 
-SUMMARY_PROMPT = """你是合同解析助手。基于以下合同元信息和主要条款，用 200~400 字总结合同的核心约定，
-包括：当事人、合同类型、核心标的、关键义务、主要金额（如有）、争议解决方式。
+SUMMARY_PROMPT = """你是文档解析助手。基于以下文档的元信息和主要内容，完成两项任务：
 
-重要：如果合同内容是双语的（中英对照），只输出中文部分作为摘要，不要输出英文或双语对照内容。
-直接输出概要正文，不要标题和前置说明。"""
+1. 判断该文档是否为合同/协议类法律文书。判断标准：
+   - 是合同：包含签约主体（甲乙方）、合同标的、权利义务条款、违约责任、争议解决等法律要件；
+   - 不是合同：如报价单、产品说明、会议纪要、通知公告、纯数据表格、技术文档等。
+2. 用 200~400 字总结文档的核心内容，包括：当事人（如有）、文档类型、核心内容、关键信息。
+
+返回 JSON（不要包裹代码块，不要任何额外说明）：
+{"is_contract": true/false, "summary": "文档概要"}
+
+重要：如果文档内容是双语的（中英对照），只输出中文部分作为摘要，不要输出英文或双语对照内容。"""
 
 
 def _parse_date(date_str: str) -> Optional[datetime.datetime]:
@@ -289,13 +327,35 @@ class ContractSlicingHandler(BaseSlicingHandler):
         # 重置 warning 收集器（handler 实例可能被复用）
         self._processing_warnings = []
         logger.debug("[contract] slicing started")
+
         # 1. 元信息提取（独立 1 次调用，输入仅前后 N 页）
         meta = await self._extract_meta(raw_content, pages)
         logger.debug("[contract] meta extraction completed")
-        # 2. 滑动窗口分析条款结构（N 次调用 → markers 列表）
+
+        # 2. 先做概要+合同判断（1 次调用），若为非合同则跳过条款分析
+        summary_result = await self._generate_summary(meta, [], raw_content=raw_content)
+        is_contract = summary_result["is_contract"]
+        logger.info(f"[contract] is_contract={is_contract}, summary_len={len(summary_result['summary'])}")
+
+        if not is_contract:
+            # 非合同文档：只保存摘要 + 正文，不切条款
+            logger.debug("[contract] non-contract document, skipping clause analysis")
+            result_data: dict = {
+                "meta": meta,
+                "is_contract": False,
+                "summary": summary_result["summary"],
+                "body_text": raw_content.strip(),
+            }
+            if self._processing_warnings:
+                result_data["processing_warnings"] = list(self._processing_warnings)
+            result = json.dumps(result_data, ensure_ascii=False)
+            return SlicingResult(content=result, prompt_used="contract_v2")
+
+        # 3. 合同文档：滑动窗口分析条款结构（N 次调用 → markers 列表）
         markers = await self._analyze_structure(raw_content)
         logger.debug("[contract] structure analysis completed")
-        # 3. 按 marker 在原文中定位并切分，定位失败项走 LLM 兜底补取
+
+        # 4. 按 marker 在原文中定位并切分，定位失败项走 LLM 兜底补取
         clauses = await self._split_by_markers(raw_content, markers)
         if not clauses:
             # 兜底：LLM 未能识别任何条款，整篇作为单一条款
@@ -309,22 +369,22 @@ class ContractSlicingHandler(BaseSlicingHandler):
         clauses = self._merge_adjacent_same_title(clauses)
 
         logger.debug("[contract] clause splitting completed")
-        # 4. 明细数据摘要化：将条款中的大段表格/清单数据替换为简短描述
+        # 5. 明细数据摘要化：将条款中的大段表格/清单数据替换为简短描述
         clauses = await self._summarize_data_in_clauses(clauses)
         logger.debug("[contract] data summarization completed")
         # 统一按顺序编号（从 1 开始，0 留给概要）
         for i, c in enumerate(clauses, start=1):
             c["clause_index"] = i
         logger.debug("[contract] clause numbering completed")
-        # 5. 生成合同概要（独立 1 次调用，作为第 0 条入库）
-        summary = await self._generate_summary(meta, clauses)
+        # 6. 重新生成合同概要（有条款上下文后更准确）
+        summary_result = await self._generate_summary(meta, clauses)
         all_clauses = [{
             "clause_index": 0,
             "clause_title": "合同概要",
-            "content": summary,
+            "content": summary_result["summary"],
         }] + clauses
         logger.debug("[contract] summary generation completed")
-        result_data: dict = {"meta": meta, "clauses": all_clauses}
+        result_data: dict = {"meta": meta, "is_contract": True, "clauses": all_clauses}
         if self._processing_warnings:
             result_data["processing_warnings"] = list(self._processing_warnings)
             logger.warning(
@@ -673,7 +733,19 @@ class ContractSlicingHandler(BaseSlicingHandler):
         title: Optional[str],
         original_marker: str,
     ) -> Optional[str]:
-        """LLM 兜底：从来源 chunk 中补取该条款的完整原文"""
+        """LLM 兜底：从来源 chunk 中补取该条款的完整原文。
+
+        输入超过 MAX_INPUT_CHARS 时在完整语句边界截断，防止 LLM 输出报错。
+        """
+        # 超长 chunk 在完整语句边界截断
+        original_len = len(chunk)
+        chunk = _truncate_at_sentence_boundary(chunk, MAX_INPUT_CHARS)
+        if len(chunk) < original_len:
+            logger.info(
+                f"[contract] recover_clause input truncated: "
+                f"title={title}, {original_len} -> {len(chunk)} chars"
+            )
+
         user_input = (
             f"# 条款标题\n{title or ''}\n\n"
             f"# 原始起始标记（仅供参考，可能存在偏差）\n{original_marker}\n\n"
@@ -706,6 +778,7 @@ class ContractSlicingHandler(BaseSlicingHandler):
         """对含大段明细数据的条款调用 LLM，将表格/清单替换为简短摘要描述。
 
         仅当条款内容 ≥ 800 字且包含列表/表格特征时才调用 LLM，否则保持原内容不变。
+        输入超过 MAX_INPUT_CHARS 时在完整语句边界截断，防止 LLM 输出报错。
         """
         for clause in clauses:
             content = clause.get("content") or ""
@@ -713,6 +786,9 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 continue
             if not self._DATA_PATTERN.search(content):
                 continue
+
+            # 超长输入在完整语句边界截断，避免 LLM 输出报错
+            content = _truncate_at_sentence_boundary(content, MAX_INPUT_CHARS)
 
             try:
                 result = await self.call_llm_structured(DATA_SUMMARIZE_PROMPT, content, ContentResponse)
@@ -733,18 +809,29 @@ class ContractSlicingHandler(BaseSlicingHandler):
 
     # ---------- 概要 ----------
 
-    async def _generate_summary(self, meta: dict, clauses: list[dict]) -> str:
-        head_clauses_text = "\n\n".join(
-            f"[{c.get('clause_title') or ''}]\n{c['content'][:500]}"
-            for c in clauses[:SUMMARY_CONTEXT_CLAUSES]
-        )
+    async def _generate_summary(self, meta: dict, clauses: list[dict], raw_content: str = "") -> dict:
+        """生成文档概要 + 判断是否为合同。
+
+        Returns:
+            {"summary": str, "is_contract": bool}
+        """
+        if clauses:
+            head_clauses_text = "\n\n".join(
+                f"[{c.get('clause_title') or ''}]\n{c['content'][:500]}"
+                for c in clauses[:SUMMARY_CONTEXT_CLAUSES]
+            )
+        else:
+            # 取原文前 MAX_INPUT_CHARS 字，在完整语句边界截断
+            head_clauses_text = _truncate_at_sentence_boundary(raw_content, MAX_INPUT_CHARS) if raw_content else "(无内容)"
+
         user_input = (
-            f"合同元信息：{json.dumps(meta, ensure_ascii=False, default=str)}\n\n"
-            f"主要条款：\n{head_clauses_text}"
+            f"文档元信息：{json.dumps(meta, ensure_ascii=False, default=str)}\n\n"
+            f"文档内容：\n{head_clauses_text}"
         )
         try:
-            return (await self.call_llm(SUMMARY_PROMPT, user_input)).strip()
+            result = await self.call_llm_structured(SUMMARY_PROMPT, user_input, SummaryResponse)
+            return {"summary": (result.summary or "").strip(), "is_contract": result.is_contract}
         except Exception as e:
             logger.exception("[contract] summary generation failed")
-            self._processing_warnings.append(f"合同概要生成失败，需人工补充: {e}")
-            return ""
+            self._processing_warnings.append(f"文档概要生成失败，需人工补充: {e}")
+            return {"summary": "", "is_contract": True}

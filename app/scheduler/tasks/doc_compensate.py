@@ -4,6 +4,7 @@
 所有补偿任务串行执行，避免 OCR 服务并发冲突。
 """
 
+import asyncio
 from datetime import datetime, timedelta
 
 from tortoise.expressions import Q
@@ -95,27 +96,33 @@ async def compensate_pending_extract():
 
 
 async def compensate_approved():
-    """补偿 approved 状态的文档：每轮只处理 1 个
+    """补偿 approved 状态的文档：每轮处理最多 2 个
 
     - 所有 approved 文档（包括飞书文件夹托管的）统一由此任务处理向量化
-    - 每轮只处理 1 个，下一轮继续处理下一个，避免阻塞其他补偿任务
+    - 每轮最多 2 个并发，向量化模块内部有全局信号量控制实际并发
     """
     docs = await Document.filter(
         status=DocumentStatus.APPROVED,
         is_deleted=False,
-    ).only("id").all()
+    ).only("id").limit(2).all()
 
     if not docs:
         return
 
-    doc = docs[0]
-    logger.info(f"[Compensate] Vectorizing 1 approved doc (total={len(docs)}): doc_id={doc.id}")
+    logger.info(
+        f"[Compensate] Vectorizing {len(docs)} approved doc(s) "
+        f"(total pending in queue): doc_ids={[d.id for d in docs]}"
+    )
 
     await renew_scheduler_lock()
-    try:
-        await document_pipeline.vectorize(doc.id)
-    except Exception:
-        logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
+
+    async def _vectorize_one(doc):
+        try:
+            await document_pipeline.vectorize(doc.id)
+        except Exception:
+            logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
+
+    await asyncio.gather(*[_vectorize_one(d) for d in docs])
 
 
 async def reset_stuck_documents():
