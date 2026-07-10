@@ -26,6 +26,7 @@ class LockKey(StrEnum):
     DOCUMENT_PROCESS = "tx_agent:lock:doc_process"
     DOCUMENT_VECTORIZE = "tx_agent:lock:doc_vectorize"
     SCHEDULER_SCAN = "tx_agent:lock:scheduler_scan"
+    SCHEDULER_APPROVED = "tx_agent:lock:scheduler_approved"  # approved 补偿任务独立锁
     FEISHU_FOLDER_SCAN = "tx_agent:lock:feishu_folder_scan"
     # 标记该 Document 由飞书文件夹监听托管，补偿任务跳过
     FEISHU_FOLDER_INGEST = "tx_agent:lock:feishu_folder_ingest"
