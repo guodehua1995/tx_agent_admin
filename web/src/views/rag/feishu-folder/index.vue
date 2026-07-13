@@ -324,8 +324,8 @@ const fileColumns = [
           )
         )
       }
-      // 失败状态 → 重试按钮
-      const isFailed = row.ingest_status === 'failed' || row.doc_status === 'failed'
+      // 失败/跳过状态 → 重试按钮
+      const isFailed = row.ingest_status === 'failed' || row.ingest_status === 'skipped' || row.doc_status === 'failed'
       if (isFailed && row.file_token) {
         const isRetrying = retryingTokens.value.has(row.file_token)
         btns.push(

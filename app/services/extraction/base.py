@@ -19,7 +19,7 @@ from . import ExtractionResult
 # 文档转换器支持的文件扩展名
 CONVERTIBLE_EXTENSIONS = {
     "docx", "doc", "pdf", "pptx", "ppt", "xlsx", "xls",
-    "csv", "txt", "md", "png", "jpg", "jpeg",
+    "csv", "txt", "md", "markdown", "png", "jpg", "jpeg", "webp", "bmp",
 }
 
 
