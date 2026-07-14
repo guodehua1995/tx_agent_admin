@@ -19,7 +19,7 @@ from . import ExtractionResult
 # 文档转换器支持的文件扩展名
 CONVERTIBLE_EXTENSIONS = {
     "docx", "doc", "pdf", "pptx", "ppt", "xlsx", "xls",
-    "csv", "txt", "md", "png", "jpg", "jpeg",
+    "csv", "txt", "md", "markdown", "png", "jpg", "jpeg", "webp", "bmp",
 }
 
 
@@ -64,7 +64,7 @@ class BaseExtractor:
             access_token = await self._get_feishu_access_token()
             file_bytes, filename = await feishu_service.download_file(doc_token, access_token)
             ext = Path(filename).suffix.lstrip(".").lower()
-            logger.info(f"Feishu file downloaded: token={doc_token}, filename={filename}, size={len(file_bytes)}")
+            logger.debug(f"Feishu file downloaded: token={doc_token}, filename={filename}, size={len(file_bytes)}")
             return file_bytes, filename, ext
 
         if doc.source_type == DocumentSourceType.FILE_UPLOAD:

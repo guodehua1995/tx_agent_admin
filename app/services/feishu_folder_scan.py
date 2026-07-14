@@ -68,7 +68,7 @@ class FeishuFolderScanService:
         if not watches:
             return
 
-        logger.info(f"[FeishuFolderScan] {len(watches)} active watches")
+        logger.debug(f"[FeishuFolderScan] {len(watches)} active watches")
 
         due_watches = [w for w in watches if self._should_scan_now(w)]
         if not due_watches:
@@ -138,6 +138,7 @@ class FeishuFolderScanService:
             deleted_count = await self._detect_deleted_files(watch, files)
             ingested = await self._ingest_new_files(watch, new_files)
             re_ingested = await self._re_ingest_updated_files(watch, updated_files)
+            retried = await self._process_pending_files(watch)
 
             watch.last_scanned_at = datetime.now()
             watch.last_scan_status = "success"
@@ -148,7 +149,7 @@ class FeishuFolderScanService:
                 f"[FeishuFolderScan] watch_id={watch.id} done: "
                 f"new={len(new_files)}, ingested={ingested}, "
                 f"updated={len(updated_files)}, re_ingested={re_ingested}, "
-                f"feishu_deleted={deleted_count}"
+                f"retried={retried}, feishu_deleted={deleted_count}"
             )
         except Exception as e:
             logger.exception(f"[FeishuFolderScan] watch_id={watch.id} error")
@@ -275,64 +276,36 @@ class FeishuFolderScanService:
     async def retry_file(self, folder_watch_id: int, file_token: str) -> int:
         """手动重试失败的文件夹监听文件。
 
-        流程：清理旧文档关联数据 → 重建 Document → 触发流水线。
-        返回新创建的 document_id。
+        流程：清理旧文档关联数据 → 重置状态为 pending，
+        由下次扫描循环统一处理（控制并发量，避免同时重试多个导致 QPS 超限）。
+        返回 0 表示已加入重试队列（无新 document_id）。
         """
         from app.services.document_service import cleanup_document
 
         record = await FeishuFolderFile.get(
             folder_watch_id=folder_watch_id, file_token=file_token
         )
-        watch = await FeishuFolderWatch.get(id=folder_watch_id)
 
         # 1. 清理旧文档（如果存在）
-        old_doc_id = record.document_id
-        if old_doc_id:
-            doc = await Document.get_or_none(id=old_doc_id)
+        if record.document_id:
+            doc = await Document.get_or_none(id=record.document_id)
             if doc and not doc.is_deleted:
-                await cleanup_document(old_doc_id)
+                await cleanup_document(record.document_id)
                 logger.info(
-                    f"[FeishuFolderScan] retry: cleaned old doc doc_id={old_doc_id}"
+                    f"[FeishuFolderScan] retry: cleaned old doc doc_id={record.document_id}"
                 )
 
-        # 2. 重建 Document（复用 _ingest_one 的 source_meta 构造逻辑）
-        file_type = record.file_type or "file"
-        feishu_url = f"https://feishu.cn/{file_type}/{file_token}"
-        source_meta = {
-            "feishu_url": feishu_url,
-            "feishu_file_token": file_token,
-            "feishu_file_type": file_type,
-            "filename": record.file_name,
-            "folder_watch_id": watch.id,
-            "auto_ingested": True,
-        }
-
-        new_doc = await Document.create(
-            title=record.file_name,
-            source_type=DocumentSourceType.FEISHU_DOC,
-            source_meta=source_meta,
-            doc_type_code=watch.doc_type_code,
-            knowledge_base_id=watch.knowledge_base_id,
-            status=DocumentStatus.PENDING_EXTRACT,
-            uploader_id=0,
-        )
-
-        # 3. 更新 FeishuFolderFile 指向新文档
-        record.document_id = new_doc.id
-        record.ingest_status = "ingested"
+        # 2. 重置为 pending，等待下次扫描循环统一处理
+        record.document_id = None
+        record.ingest_status = "pending"
         record.ingest_error = None
         await record.save()
 
-        # 4. 触发流水线
-        await self._set_ingest_lock(new_doc.id)
-        asyncio.create_task(self._do_process(watch, new_doc.id))
-
         logger.info(
-            f"[FeishuFolderScan] retry: watch_id={folder_watch_id}, "
-            f"token={file_token}, old_doc_id={old_doc_id}, "
-            f"new_doc_id={new_doc.id}"
+            f"[FeishuFolderScan] retry: reset to pending, "
+            f"watch_id={folder_watch_id}, token={file_token}"
         )
-        return new_doc.id
+        return 0
 
     async def _ingest_new_files(
         self, watch: FeishuFolderWatch, new_files: list[dict]
@@ -378,6 +351,50 @@ class FeishuFolderScanService:
                     },
                 )
         return ingested
+
+    async def _process_pending_files(self, watch: FeishuFolderWatch) -> int:
+        """处理 retry_file 重置为 pending 的文件，走 _ingest_one 统一流程。
+
+        与 _ingest_new_files 共享 batch_limit，避免单轮入队过多。
+        """
+        pending_records = await FeishuFolderFile.filter(
+            folder_watch_id=watch.id,
+            ingest_status="pending",
+        )
+        if not pending_records:
+            return 0
+
+        batch_limit = settings.FEISHU_FOLDER_SCAN_BATCH_LIMIT
+        batch = pending_records[:batch_limit]
+        if len(pending_records) > batch_limit:
+            logger.info(
+                f"[FeishuFolderScan] pending batch truncated: watch_id={watch.id}, "
+                f"{len(pending_records)} → {batch_limit}"
+            )
+
+        retried = 0
+        for record in batch:
+            await renew_scheduler_lock()
+            try:
+                # 从 FeishuFolderFile 构造 file_meta，复用 _ingest_one 流程
+                file_meta = {
+                    "token": record.file_token,
+                    "name": record.file_name,
+                    "type": record.file_type or "",
+                    "modified_time": record.feishu_modified_time,
+                }
+                if await self._ingest_one(watch, file_meta):
+                    retried += 1
+            except Exception as e:
+                logger.exception(
+                    f"[FeishuFolderScan] retry pending failed: watch_id={watch.id}, "
+                    f"token={record.file_token}"
+                )
+                # 兜底登记 failed，避免下轮重复尝试
+                record.ingest_status = "failed"
+                record.ingest_error = str(e)[:1000]
+                await record.save()
+        return retried
 
     async def _ingest_one(self, watch: FeishuFolderWatch, file_meta: dict) -> bool:
         """单文件入库。返回 True 表示成功创建 Document。"""

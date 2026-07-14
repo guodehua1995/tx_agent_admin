@@ -4,6 +4,7 @@
 所有补偿任务串行执行，避免 OCR 服务并发冲突。
 """
 
+import asyncio
 from datetime import datetime, timedelta
 
 from tortoise.expressions import Q
@@ -46,10 +47,10 @@ async def _should_auto_approve(doc: Document) -> bool:
 
 
 async def compensate_pending_extract():
-    """补偿 pending_extract 状态的文档：串行执行提取流程
+    """补偿 pending_extract 状态的文档：每轮只处理 1 个
 
     - OCR 服务 QPS 有限，多文档并行会导致大量重试失败
-    - 因此改为串行：逐个处理，前一个完成后再处理下一个
+    - 每轮只处理 1 个，下一轮继续处理下一个，避免阻塞其他补偿任务
     - 飞书文件夹托管的文档（FEISHU_FOLDER_INGEST 标记锁）会跳过
     """
     docs = await Document.filter(
@@ -60,75 +61,68 @@ async def compensate_pending_extract():
     if not docs:
         return
 
-    logger.info(f"[Compensate] Found {len(docs)} pending_extract documents")
+    # 过滤飞书文件夹托管的文档，取第一个处理
+    for doc in docs:
+        if await _is_feishu_folder_managed(doc.id):
+            continue
+        break
+    else:
+        return  # 全部被飞书托管
 
-    # 过滤飞书文件夹托管的文档
-    candidates = []
-    for d in docs:
-        if not await _is_feishu_folder_managed(d.id):
-            candidates.append(d)
+    logger.info(f"[Compensate] Processing 1 pending_extract doc (total={len(docs)}): doc_id={doc.id}")
 
-    skipped = len(docs) - len(candidates)
-    if skipped:
-        logger.debug(f"[Compensate] Skipped {skipped} feishu-managed pending_extract docs")
-    if not candidates:
-        return
+    await renew_scheduler_lock()
+    try:
+        await document_pipeline.extract(doc.id)
 
-    logger.info(f"[Compensate] Compensating {len(candidates)} pending_extract docs (serial)")
+        # 重新加载文档状态：extract 可能因 Redis 锁被占用而静默跳过
+        await doc.refresh_from_db()
+        if doc.status != DocumentStatus.PENDING_REVIEW:
+            logger.info(
+                f"[Compensate] extract did not advance status, "
+                f"skip auto-approve: doc_id={doc.id}, status={doc.status}"
+            )
+            return
 
-    # 串行执行：逐个处理，避免 OCR 并发冲突
-    for doc in candidates:
-        # 续活调度器锁，防止长循环导致锁过期
-        await renew_scheduler_lock()
-        try:
-            logger.info(f"[Compensate] Processing pending_extract: doc_id={doc.id}")
-            await document_pipeline.extract(doc.id)
-
-            # 重新加载文档状态：extract 可能因 Redis 锁被占用而静默跳过
-            await doc.refresh_from_db()
-            if doc.status != DocumentStatus.PENDING_REVIEW:
-                logger.info(
-                    f"[Compensate] extract did not advance status, "
-                    f"skip auto-approve: doc_id={doc.id}, status={doc.status}"
-                )
-                continue
-
-            # 提取成功后检查是否需要自动审批
-            if await _should_auto_approve(doc):
-                logger.info(
-                    f"[Compensate] Auto-approving: doc_id={doc.id} "
-                    f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
-                )
-                await document_pipeline.approve(doc.id)
-        except Exception:
-            logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
+        # 提取成功后检查是否需要自动审批
+        if await _should_auto_approve(doc):
+            logger.debug(
+                f"[Compensate] Auto-approving: doc_id={doc.id} "
+                f"(folder_watch_id={doc.source_meta.get('folder_watch_id')})"
+            )
+            await document_pipeline.approve(doc.id)
+    except Exception:
+        logger.exception(f"[Compensate] extract failed: doc_id={doc.id}")
 
 
 async def compensate_approved():
-    """补偿 approved 状态的文档：串行执行切片+向量化
+    """补偿 approved 状态的文档：每轮处理最多 2 个
 
     - 所有 approved 文档（包括飞书文件夹托管的）统一由此任务处理向量化
-    - 串行执行：逐个处理，前一个完成后再处理下一个
+    - 每轮最多 2 个并发，向量化模块内部有全局信号量控制实际并发
     """
     docs = await Document.filter(
         status=DocumentStatus.APPROVED,
         is_deleted=False,
-    ).all()
+    ).only("id").limit(2).all()
 
     if not docs:
         return
 
-    logger.info(f"[Compensate] Found {len(docs)} approved documents")
+    logger.info(
+        f"[Compensate] Vectorizing {len(docs)} approved doc(s) "
+        f"(total pending in queue): doc_ids={[d.id for d in docs]}"
+    )
 
-    # 串行执行：逐个处理
-    for doc in docs:
-        # 续活调度器锁，防止长循环导致锁过期
-        await renew_scheduler_lock()
+    await renew_scheduler_lock()
+
+    async def _vectorize_one(doc):
         try:
-            logger.info(f"[Compensate] Vectorizing approved: doc_id={doc.id}")
             await document_pipeline.vectorize(doc.id)
         except Exception:
             logger.exception(f"[Compensate] vectorize failed: doc_id={doc.id}")
+
+    await asyncio.gather(*[_vectorize_one(d) for d in docs])
 
 
 async def reset_stuck_documents():

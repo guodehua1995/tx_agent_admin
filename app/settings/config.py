@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 4000
 
+    # 轻量级模型 执行简单/快速任务用。
+    LITE_LLM_MODEL_NAME: str = "gpt-3.5-turbo"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -43,6 +43,24 @@ const loading = ref(false)
 const contract = ref(null)
 const similarContracts = ref([])
 
+// 检测条款原文是否包含提取失败标记
+const EXTRACT_FAILURE_PATTERN = /⚠️\s*\*\*提取失败\*\*|OCR\s*识别失败/
+
+function hasExtractFailure(clause) {
+  if (!clause) return false
+  const text = clause.original_text || ''
+  return EXTRACT_FAILURE_PATTERN.test(text)
+}
+
+// 递归检查条款树中是否包含提取失败（用于父节点标识）
+function subtreeHasFailure(clause) {
+  if (hasExtractFailure(clause)) return true
+  if (clause.children && clause.children.length > 0) {
+    return clause.children.some(c => subtreeHasFailure(c))
+  }
+  return false
+}
+
 function buildClauseTree(clauses) {
   if (!clauses || clauses.length === 0) return []
   // 按 sort_order 排序，确保层级内顺序正确
@@ -57,6 +75,15 @@ function buildClauseTree(clauses) {
         { type: 'info', size: 'tiny', style: 'margin-right: 6px' },
         { default: () => String(item.clause_index) }
       ),
+    suffix: () => {
+      const failed = hasExtractFailure(item) || subtreeHasFailure(item)
+      if (!failed) return null
+      return h(
+        'span',
+        { style: 'color: #d03050; font-size: 12px; margin-left: 4px', title: '该条款内容包含提取失败标记' },
+        '⚠'
+      )
+    },
     clause: item,
   }))
 }
@@ -372,6 +399,20 @@ onMounted(() => {
                 <h3 style="margin-bottom: 8px">
                   {{ selectedClause.clause_title || `条款 ${selectedClause.clause_index}` }}
                 </h3>
+                <div
+                  v-if="hasExtractFailure(selectedClause)"
+                  style="
+                    margin-bottom: 12px;
+                    padding: 8px 12px;
+                    background: #fff0f0;
+                    border: 1px solid #f0a0a0;
+                    border-radius: 4px;
+                    color: #d03050;
+                    font-size: 13px;
+                  "
+                >
+                  ⚠️ 本条款原文包含提取失败的内容，请核对原始文档后手动补录。
+                </div>
                 <div
                   v-if="selectedClause.summary"
                   style="

@@ -675,13 +675,17 @@ class ContractService:
     # ── 合同审查 ──────────────────────────────────────────────────
 
     async def get_clause_tree(self, contract_id: int) -> list[dict]:
-        """获取合同根级条款树（含子条款），供审查定时任务使用"""
+        """获取合同根级条款树（含子条款），供审查定时任务使用
+
+        用 parent_id 判断根节点（与 _build_tree 一致），而非 clause_level。
+        这样即使有 level > 0 的孤儿条款也不会被遗漏。
+        """
         logger.debug(f"[get_clause_tree] contract_id={contract_id}")
 
-        # 获取所有根级条款（clause_level=0）
+        # 获取所有根级条款（parent_id 为空）
         root_clauses = await ContractClause.filter(
             contract_id=contract_id,
-            clause_level=0,
+            parent_id=None,
             is_deleted=False,
         ).order_by("clause_index")
 

@@ -318,8 +318,15 @@ class BaseFileHandler(ABC):
 # ============================================================
 
 
+# Word 文本最低字符阈值，低于此值则触发图片提取+Vision LLM 补充
+_DOCX_MIN_TEXT_CHARS = 500
+
+
 class DocxHandler(BaseFileHandler):
-    """DOCX 文件处理：mammoth 提取纯文字转 Markdown"""
+    """DOCX 文件处理：mammoth 提取纯文字转 Markdown。
+
+    文字太少时自动提取文档内嵌图片，走 Vision LLM 识别补充内容。
+    """
 
     async def handle(self, file_stream: bytes, filename: str) -> list[ConvertedPage]:
         import mammoth
@@ -330,6 +337,22 @@ class DocxHandler(BaseFileHandler):
         if result.messages:
             for msg in result.messages:
                 logger.debug(f"[DocxHandler] mammoth message: {msg}")
+
+        text_chars = len(content.strip())
+        logger.debug(f"[DocxHandler] text extracted: {text_chars} chars from {filename}")
+
+        # 文字太少时提取内嵌图片，走 Vision LLM 补充
+        if text_chars < _DOCX_MIN_TEXT_CHARS:
+            logger.info(
+                f"[DocxHandler] text too short ({text_chars} < {_DOCX_MIN_TEXT_CHARS}), "
+                f"extracting embedded images from {filename}"
+            )
+            image_md = await self._extract_and_ocr_images(file_stream)
+            if image_md:
+                if content.strip():
+                    content = content.strip() + "\n\n" + image_md
+                else:
+                    content = image_md
 
         if not content.strip():
             content = "(文档内容为空)"
@@ -345,6 +368,41 @@ class DocxHandler(BaseFileHandler):
             )
         ]
 
+    async def _extract_and_ocr_images(self, file_stream: bytes) -> str:
+        """从 docx（ZIP）中提取内嵌图片，送 Vision LLM 识别。"""
+        import zipfile
+
+        images: list[bytes] = []
+        try:
+            with zipfile.ZipFile(BytesIO(file_stream)) as zf:
+                for name in zf.namelist():
+                    if name.startswith("word/media/") and not name.endswith("/"):
+                        ext = Path(name).suffix.lower()
+                        if ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+                            images.append(zf.read(name))
+                            logger.debug(f"[DocxHandler] found embedded image: {name}")
+        except Exception as e:
+            logger.warning(f"[DocxHandler] failed to extract images from docx: {e}")
+            return ""
+
+        if not images:
+            logger.debug("[DocxHandler] no embedded images found in docx")
+            return ""
+
+        logger.info(f"[DocxHandler] extracted {len(images)} embedded images, sending to Vision LLM")
+        results: list[str] = []
+        for i, img_bytes in enumerate(images, start=1):
+            try:
+                md = await _call_vision_llm(
+                    img_bytes, i, context="Word文档内嵌图片",
+                )
+                if md.strip():
+                    results.append(md.strip())
+            except Exception as e:
+                logger.warning(f"[DocxHandler] Vision LLM failed for image {i}: {e}")
+
+        return "\n\n".join(results) if results else ""
+
 
 class PdfHandler(BaseFileHandler):
     """PDF 文件处理：火山引擎 OCR 智能文档解析 → Markdown
@@ -359,7 +417,7 @@ class PdfHandler(BaseFileHandler):
         if not file_stream:
             raise ConversionError("PDF 文件为空")
 
-        logger.info(f"[PdfHandler] 使用火山引擎 OCR 解析: {filename}, size={len(file_stream)} bytes")
+        logger.debug(f"[PdfHandler] 使用火山引擎 OCR 解析: {filename}, size={len(file_stream)} bytes")
 
         try:
             full_markdown = await ocr_pdf_to_markdown(file_stream)
@@ -426,8 +484,8 @@ class PptxHandler(BaseFileHandler):
                     ConvertedPage(
                         page_number=i,
                         total_pages=total,
-                        content=f"> [页面处理失败: {str(e)}]",
-                        content_type="vision_extracted",
+                        content=f"> ⚠️ **提取失败** [第 {i} 页]: {str(e)}",
+                        content_type="extraction_failed",
                         source_file_type="pptx",
                         metadata={"filename": filename, "error": str(e)},
                         image_bytes=img_bytes,
@@ -455,14 +513,17 @@ class ImageHandler(BaseFileHandler):
             content = await _call_vision_llm(png_bytes, 1, context="图片")
         except Exception as e:
             logger.error(f"[ImageHandler] Failed: {e}")
-            content = f"> [图片处理失败: {str(e)}]"
+            content = f"> ⚠️ **提取失败**: {str(e)}"
+            content_type = "extraction_failed"
+        else:
+            content_type = "vision_extracted"
 
         return [
             ConvertedPage(
                 page_number=1,
                 total_pages=1,
                 content=content,
-                content_type="vision_extracted",
+                content_type=content_type,
                 source_file_type=ext,
                 metadata={"filename": filename},
             )
@@ -681,7 +742,7 @@ class DocumentConverter:
         pages = await handler.handle(file_stream, filename)
 
         logger.info(
-            f"[DocumentConverter] Conversion complete: {len(pages)} pages extracted"
+            f"[DocumentConverter] Conversion complete: {len(pages)} pages extracted from {filename}"
         )
         return pages
 
