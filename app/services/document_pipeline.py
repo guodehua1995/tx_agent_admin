@@ -713,10 +713,8 @@ class DocumentPipeline:
 
             # 概要 clause 的 summary
             summary = None
-            summary_status = "pending_summary"  # 默认待摘要，由定时任务生成
             if clause_index == 0:
                 summary = original_text[:500] if original_text else None
-                summary_status = "summary_complete"  # 概要条款已完成
 
             clause_obj = await ContractClause.create(
                 contract=contract,
@@ -726,7 +724,6 @@ class DocumentPipeline:
                 clause_level=level,
                 original_text=original_text,
                 summary=summary,
-                summary_status=summary_status,
                 sort_order=clause_index,
             )
 

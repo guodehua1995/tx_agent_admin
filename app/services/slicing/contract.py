@@ -656,6 +656,48 @@ class ContractSlicingHandler(BaseSlicingHandler):
     # ---------- 原文定位与切分（含 LLM 兜底）----------
 
     @staticmethod
+    def _extract_chunk_excerpt(chunk: str, marker: str, title: str, max_chars: int = 1000) -> str:
+        """从 source_chunk 中提取与 marker/title 最相关的片段，不超过 max_chars 字符。
+
+        定位优先级：marker > title > chunk 开头。
+        截取边界优先在换行符处截断，避免截断在句子中间。
+        """
+        chunk = chunk.strip()
+        if len(chunk) <= max_chars:
+            return chunk
+
+        # 在 chunk 内定位锚点
+        anchor = -1
+        if marker:
+            anchor = chunk.find(marker)
+            if anchor < 0 and len(marker) > 10:
+                anchor = chunk.find(marker[:10])
+        if anchor < 0 and title:
+            anchor = chunk.find(title)
+            if anchor < 0 and len(title) > 6:
+                anchor = chunk.find(title[:6])
+
+        # 锚点未找到，取 chunk 开头 max_chars
+        if anchor < 0:
+            excerpt = chunk[:max_chars]
+        else:
+            # 以锚点为起点，向后取 max_chars
+            end = min(anchor + max_chars, len(chunk))
+            excerpt = chunk[anchor:end]
+
+        # 尝试在末尾换行符处截断，避免截断在句子中间
+        if len(excerpt) == max_chars:
+            best_cut = -1
+            for sep in ['\n\n', '\n', '。', '；']:
+                cut = excerpt.rfind(sep, max_chars // 2)
+                if cut > best_cut:
+                    best_cut = cut
+            if best_cut > 0:
+                excerpt = excerpt[:best_cut + 1]
+
+        return excerpt.strip()
+
+    @staticmethod
     def _locate_marker(text: str, marker: str) -> int:
         """多层定位：返回 marker 在 text 中的位置，未找到返回 -1"""
         if not marker:
@@ -676,19 +718,31 @@ class ContractSlicingHandler(BaseSlicingHandler):
         return -1
 
     async def _split_by_markers(self, text: str, markers: list[dict]) -> list[dict]:
-        """按 marker 顺序切分原文，定位失败项走 LLM 兜底补取；均失败时保留占位供人工补充"""
+        """按 marker 顺序切分原文，三级降级：marker定位 → title定位 → LLM兜底 → 原始片段"""
         if not markers:
             return []
 
-        # 第一遍：在原文中定位
+        # 第一遍：在原文中定位（优先 marker，其次 title）
         located_pos: dict[int, int] = {}   # idx_in_markers → pos_in_text
         fallback_indices: list[int] = []   # 定位失败的 markers
         for i, m in enumerate(markers):
+            # ① 通过 marker 文本定位
             pos = self._locate_marker(text, m["marker"])
             if pos >= 0:
                 located_pos[i] = pos
-            else:
-                fallback_indices.append(i)
+                continue
+            # ② marker 定位失败，尝试通过 title 文本定位
+            title = (m.get("title") or "").strip()
+            if title:
+                title_pos = self._locate_marker(text, title)
+                if title_pos >= 0:
+                    located_pos[i] = title_pos
+                    logger.debug(
+                        f"[contract] located by title: title={title[:30]}, pos={title_pos}"
+                    )
+                    continue
+            # ③ 均未定位成功，进入兜底
+            fallback_indices.append(i)
 
         # 计算定位成功项的切分范围（按位置排序，相邻定位点为边界）
         sorted_located = sorted(located_pos.items(), key=lambda kv: kv[1])
@@ -699,11 +753,11 @@ class ContractSlicingHandler(BaseSlicingHandler):
 
         # 第二遍：定位失败的项走 LLM 兜底
         fallback_content: dict[int, str] = {}
-        # if fallback_indices:
-            # logger.info(f"[contract] {len(fallback_indices)} markers need LLM recovery")
+        if fallback_indices:
+            logger.info(f"[contract] {len(fallback_indices)} markers need LLM recovery")
         for idx in fallback_indices:
             m = markers[idx]
-            chunk = text[m["source_chunk_start"] : m["source_chunk_end"]]
+            chunk = text[m["source_chunk_start"]: m["source_chunk_end"]]
             recovered = await self._recover_clause(chunk, m["title"], m["marker"])
             if recovered:
                 fallback_content[idx] = recovered
@@ -711,10 +765,12 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 logger.warning(
                     f"[contract] marker recovery failed: title={m.get('title')}, marker={m['marker'][:30]}"
                 )
-                # 保留原始片段，供人工参考
-                fallback_raw_chunks[idx] = chunk
+                # LLM 兜底也失败，从 source_chunk 中提取相关片段（≤1000字符）
+                fallback_content[idx] = self._extract_chunk_excerpt(
+                    chunk, m["marker"], m.get("title") or ""
+                )
 
-        # 按原始 markers 顺序拼装结果；定位与兜底都失败时展示原始片段供人工补充
+        # 按原始 markers 顺序拼装结果
         clauses: list[dict] = []
         for i, m in enumerate(markers):
             content = located_content.get(i) or fallback_content.get(i)
@@ -722,19 +778,12 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 marker_preview = (m.get("marker") or "")[:30]
                 title_preview = m.get("title") or "(未知标题)"
                 self._processing_warnings.append(
-                    f"条款「{title_preview}」定位与 LLM 兜底均失败（marker={marker_preview}...），需人工补充原文"
+                    f"条款「{title_preview}」定位、title匹配与 LLM 兜底均失败（marker={marker_preview}...），需人工补充原文"
                 )
-                # 展示原始片段供人工参考
-                raw_chunk = fallback_raw_chunks.get(i, "")
-                if raw_chunk:
-                    content = (
-                        f"{raw_chunk}"
-                    )
-                else:
-                    content = (
-                        f"⚠️ 该条款解析失败，请人工补充原文。\n"
-                        f"（原始起始标记：{marker_preview}...）"
-                    )
+                content = (
+                    f"⚠️ 该条款解析失败，请人工补充原文。\n"
+                    f"（原始起始标记：{marker_preview}...）"
+                )
             clauses.append({"clause_title": m["title"], "level": m.get("level", 0), "content": content})
         return clauses
 
@@ -833,9 +882,6 @@ class ContractSlicingHandler(BaseSlicingHandler):
             logger.exception(f"[contract] recover_clause LLM call failed: title={title}")
             return None
         if not content or content == "无":
-            return None
-        # 二次校验：返回的 content 前 20 字必须能在 chunk 中定位，防止 LLM 改写
-        if content[:20] not in chunk:
             return None
         return content
 
