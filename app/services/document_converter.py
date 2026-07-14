@@ -484,8 +484,8 @@ class PptxHandler(BaseFileHandler):
                     ConvertedPage(
                         page_number=i,
                         total_pages=total,
-                        content=f"> [页面处理失败: {str(e)}]",
-                        content_type="vision_extracted",
+                        content=f"> ⚠️ **提取失败** [第 {i} 页]: {str(e)}",
+                        content_type="extraction_failed",
                         source_file_type="pptx",
                         metadata={"filename": filename, "error": str(e)},
                         image_bytes=img_bytes,
@@ -513,14 +513,17 @@ class ImageHandler(BaseFileHandler):
             content = await _call_vision_llm(png_bytes, 1, context="图片")
         except Exception as e:
             logger.error(f"[ImageHandler] Failed: {e}")
-            content = f"> [图片处理失败: {str(e)}]"
+            content = f"> ⚠️ **提取失败**: {str(e)}"
+            content_type = "extraction_failed"
+        else:
+            content_type = "vision_extracted"
 
         return [
             ConvertedPage(
                 page_number=1,
                 total_pages=1,
                 content=content,
-                content_type="vision_extracted",
+                content_type=content_type,
                 source_file_type=ext,
                 metadata={"filename": filename},
             )

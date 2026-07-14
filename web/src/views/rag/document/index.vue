@@ -701,13 +701,17 @@ const columns = [
                     v-for="(page, idx) in pageList"
                     :key="page.page_number"
                     :style="{
-                      border: idx === currentPageIndex ? '2px solid #18a058' : '1px solid #e0e0e0',
+                      border: page.content_type === 'extraction_failed'
+                        ? '2px solid #d03050'
+                        : idx === currentPageIndex ? '2px solid #18a058' : '1px solid #e0e0e0',
                       borderRadius: '6px',
                       padding: '6px',
                       marginBottom: '8px',
                       cursor: 'pointer',
                       textAlign: 'center',
-                      background: idx === currentPageIndex ? '#f0faf4' : '#fff',
+                      background: page.content_type === 'extraction_failed'
+                        ? '#fff0f0'
+                        : idx === currentPageIndex ? '#f0faf4' : '#fff',
                     }"
                     @click="loadPageDetail(idx)"
                   >
@@ -721,6 +725,7 @@ const columns = [
                       无截图
                     </div>
                     <div style="font-size: 12px; margin-top: 4px; color: #666">第 {{ page.page_number }} 页</div>
+                    <div v-if="page.content_type === 'extraction_failed'" style="font-size: 11px; color: #d03050; margin-top: 2px">⚠ 提取失败</div>
                   </div>
                 </div>
 
@@ -735,6 +740,9 @@ const columns = [
                   </NCard>
                   <!-- 当前页内容编辑/预览 -->
                   <NCard size="small" title="页面内容">
+                    <div v-if="currentPageDetail?.content_type === 'extraction_failed'" style="margin-bottom: 12px; padding: 8px 12px; background: #fff0f0; border: 1px solid #f0a0a0; border-radius: 4px; color: #d03050; font-size: 13px">
+                      ⚠️ 本页内容提取失败，下方为原始截图，可手动补录。
+                    </div>
                     <template v-if="isContentEditable">
                       <div ref="pageVditorContainer" style="min-height: 300px" />
                     </template>
