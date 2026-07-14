@@ -15,6 +15,7 @@ import datetime
 import json
 import re
 from decimal import Decimal
+from difflib import SequenceMatcher
 from typing import Optional
 
 from app.log import logger
@@ -246,6 +247,55 @@ def _parse_amount(amount_val) -> Optional[Decimal]:
         return val if val >= 0 else None
     except Exception:
         return None
+
+
+# 模糊匹配阈值（80% 相似度视为匹配）
+_FUZZY_MATCH_THRESHOLD = 0.8
+
+
+def _fuzzy_match_marker(text: str, marker: str) -> int:
+    """模糊匹配 marker 与文档标题，返回匹配位置，未找到返回 -1。
+
+    提取文档中所有疑似标题行（短行、含“第X条/章”等模式），
+    用 SequenceMatcher 与 marker 比对，超过阈值则视为匹配。
+    """
+    if not marker or not text:
+        return -1
+
+    # 提取候选标题行：长度 < 100 且非空白的行
+    candidates: list[tuple[int, str]] = []  # (line_start_pos, line_text)
+    for m in re.finditer(r'^(.+)$', text, re.MULTILINE):
+        line = m.group(1).strip()
+        if line and len(line) < 100:
+            candidates.append((m.start(), line))
+
+    if not candidates:
+        return -1
+
+    # 去除编号后的 marker（如 "第一条 定义" -> "定义"）
+    marker_no_num = re.sub(r'^第[一二三四五六七八九十百千\d]+[条章节]\s*', '', marker).strip()
+
+    best_pos = -1
+    best_score = 0.0
+
+    for pos, line in candidates:
+        # 直接比对
+        score = SequenceMatcher(None, marker, line).ratio()
+
+        # 去编号后比对
+        if marker_no_num:
+            line_no_num = re.sub(r'^第[一二三四五六七八九十百千\d]+[条章节]\s*', '', line).strip()
+            if line_no_num:
+                score_no_num = SequenceMatcher(None, marker_no_num, line_no_num).ratio()
+                score = max(score, score_no_num)
+
+        if score >= _FUZZY_MATCH_THRESHOLD and score > best_score:
+            best_score = score
+            best_pos = pos
+
+    if best_pos >= 0:
+        logger.debug(f"[contract] fuzzy match: marker={marker[:30]}... pos={best_pos} score={best_score:.2f}")
+    return best_pos
 
 
 @register_handler("contract")
@@ -524,6 +574,10 @@ class ContractSlicingHandler(BaseSlicingHandler):
             pos = text.find(marker[:15])
             if pos >= 0:
                 return pos
+        # ③ 模糊匹配（与文档标题比对，80% 相似度视为匹配）
+        fuzzy_pos = _fuzzy_match_marker(text, marker)
+        if fuzzy_pos >= 0:
+            return fuzzy_pos
         return -1
 
     async def _split_by_markers(self, text: str, markers: list[dict]) -> list[dict]:
@@ -550,6 +604,7 @@ class ContractSlicingHandler(BaseSlicingHandler):
 
         # 第二遍：定位失败的项走 LLM 兜底
         fallback_content: dict[int, str] = {}
+        fallback_raw_chunks: dict[int, str] = {}  # LLM 也失败时，保留原始片段供人工参考
         if fallback_indices:
             logger.info(f"[contract] {len(fallback_indices)} markers need LLM recovery")
         for idx in fallback_indices:
@@ -563,8 +618,10 @@ class ContractSlicingHandler(BaseSlicingHandler):
                     "[contract] marker recovery failed: title=%s, marker=%s",
                     m.get("title"), m["marker"][:30],
                 )
+                # 保留原始片段，供人工参考
+                fallback_raw_chunks[idx] = chunk
 
-        # 按原始 markers 顺序拼装结果；定位与兜底都失败时保留占位供人工补充
+        # 按原始 markers 顺序拼装结果；定位与兜底都失败时展示原始片段供人工补充
         clauses: list[dict] = []
         for i, m in enumerate(markers):
             content = located_content.get(i) or fallback_content.get(i)
@@ -574,10 +631,17 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 self._processing_warnings.append(
                     f"条款「{title_preview}」定位与 LLM 兜底均失败（marker={marker_preview}...），需人工补充原文"
                 )
-                content = (
-                    f"⚠️ 该条款解析失败，请人工补充原文。\n"
-                    f"（原始起始标记：{marker_preview}...）"
-                )
+                # 展示原始片段供人工参考
+                raw_chunk = fallback_raw_chunks.get(i, "")
+                if raw_chunk:
+                    content = (
+                        f"{raw_chunk}"
+                    )
+                else:
+                    content = (
+                        f"⚠️ 该条款解析失败，请人工补充原文。\n"
+                        f"（原始起始标记：{marker_preview}...）"
+                    )
             clauses.append({"clause_title": m["title"], "level": m.get("level", 0), "content": content})
         return clauses
 
