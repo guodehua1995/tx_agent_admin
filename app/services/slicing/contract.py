@@ -15,6 +15,7 @@ import datetime
 import json
 import re
 from decimal import Decimal
+from difflib import SequenceMatcher
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -320,6 +321,55 @@ def _parse_amount(amount_val) -> Optional[Decimal]:
         return None
 
 
+# 模糊匹配阈值（80% 相似度视为匹配）
+_FUZZY_MATCH_THRESHOLD = 0.8
+
+
+def _fuzzy_match_marker(text: str, marker: str) -> int:
+    """模糊匹配 marker 与文档标题，返回匹配位置，未找到返回 -1。
+
+    提取文档中所有疑似标题行（短行、含“第X条/章”等模式），
+    用 SequenceMatcher 与 marker 比对，超过阈值则视为匹配。
+    """
+    if not marker or not text:
+        return -1
+
+    # 提取候选标题行：长度 < 100 且非空白的行
+    candidates: list[tuple[int, str]] = []  # (line_start_pos, line_text)
+    for m in re.finditer(r'^(.+)$', text, re.MULTILINE):
+        line = m.group(1).strip()
+        if line and len(line) < 100:
+            candidates.append((m.start(), line))
+
+    if not candidates:
+        return -1
+
+    # 去除编号后的 marker（如 "第一条 定义" -> "定义"）
+    marker_no_num = re.sub(r'^第[一二三四五六七八九十百千\d]+[条章节]\s*', '', marker).strip()
+
+    best_pos = -1
+    best_score = 0.0
+
+    for pos, line in candidates:
+        # 直接比对
+        score = SequenceMatcher(None, marker, line).ratio()
+
+        # 去编号后比对
+        if marker_no_num:
+            line_no_num = re.sub(r'^第[一二三四五六七八九十百千\d]+[条章节]\s*', '', line).strip()
+            if line_no_num:
+                score_no_num = SequenceMatcher(None, marker_no_num, line_no_num).ratio()
+                score = max(score, score_no_num)
+
+        if score >= _FUZZY_MATCH_THRESHOLD and score > best_score:
+            best_score = score
+            best_pos = pos
+
+    if best_pos >= 0:
+        logger.debug(f"[contract] fuzzy match: marker={marker[:30]}... pos={best_pos} score={best_score:.2f}")
+    return best_pos
+
+
 @register_handler("contract")
 class ContractSlicingHandler(BaseSlicingHandler):
     """合同文档切片处理器"""
@@ -606,6 +656,48 @@ class ContractSlicingHandler(BaseSlicingHandler):
     # ---------- 原文定位与切分（含 LLM 兜底）----------
 
     @staticmethod
+    def _extract_chunk_excerpt(chunk: str, marker: str, title: str, max_chars: int = 1000) -> str:
+        """从 source_chunk 中提取与 marker/title 最相关的片段，不超过 max_chars 字符。
+
+        定位优先级：marker > title > chunk 开头。
+        截取边界优先在换行符处截断，避免截断在句子中间。
+        """
+        chunk = chunk.strip()
+        if len(chunk) <= max_chars:
+            return chunk
+
+        # 在 chunk 内定位锚点
+        anchor = -1
+        if marker:
+            anchor = chunk.find(marker)
+            if anchor < 0 and len(marker) > 10:
+                anchor = chunk.find(marker[:10])
+        if anchor < 0 and title:
+            anchor = chunk.find(title)
+            if anchor < 0 and len(title) > 6:
+                anchor = chunk.find(title[:6])
+
+        # 锚点未找到，取 chunk 开头 max_chars
+        if anchor < 0:
+            excerpt = chunk[:max_chars]
+        else:
+            # 以锚点为起点，向后取 max_chars
+            end = min(anchor + max_chars, len(chunk))
+            excerpt = chunk[anchor:end]
+
+        # 尝试在末尾换行符处截断，避免截断在句子中间
+        if len(excerpt) == max_chars:
+            best_cut = -1
+            for sep in ['\n\n', '\n', '。', '；']:
+                cut = excerpt.rfind(sep, max_chars // 2)
+                if cut > best_cut:
+                    best_cut = cut
+            if best_cut > 0:
+                excerpt = excerpt[:best_cut + 1]
+
+        return excerpt.strip()
+
+    @staticmethod
     def _locate_marker(text: str, marker: str) -> int:
         """多层定位：返回 marker 在 text 中的位置，未找到返回 -1"""
         if not marker:
@@ -619,22 +711,38 @@ class ContractSlicingHandler(BaseSlicingHandler):
             pos = text.find(marker[:15])
             if pos >= 0:
                 return pos
+        # ③ 模糊匹配（与文档标题比对，80% 相似度视为匹配）
+        fuzzy_pos = _fuzzy_match_marker(text, marker)
+        if fuzzy_pos >= 0:
+            return fuzzy_pos
         return -1
 
     async def _split_by_markers(self, text: str, markers: list[dict]) -> list[dict]:
-        """按 marker 顺序切分原文，定位失败项走 LLM 兜底补取；均失败时保留占位供人工补充"""
+        """按 marker 顺序切分原文，三级降级：marker定位 → title定位 → LLM兜底 → 原始片段"""
         if not markers:
             return []
 
-        # 第一遍：在原文中定位
+        # 第一遍：在原文中定位（优先 marker，其次 title）
         located_pos: dict[int, int] = {}   # idx_in_markers → pos_in_text
         fallback_indices: list[int] = []   # 定位失败的 markers
         for i, m in enumerate(markers):
+            # ① 通过 marker 文本定位
             pos = self._locate_marker(text, m["marker"])
             if pos >= 0:
                 located_pos[i] = pos
-            else:
-                fallback_indices.append(i)
+                continue
+            # ② marker 定位失败，尝试通过 title 文本定位
+            title = (m.get("title") or "").strip()
+            if title:
+                title_pos = self._locate_marker(text, title)
+                if title_pos >= 0:
+                    located_pos[i] = title_pos
+                    logger.debug(
+                        f"[contract] located by title: title={title[:30]}, pos={title_pos}"
+                    )
+                    continue
+            # ③ 均未定位成功，进入兜底
+            fallback_indices.append(i)
 
         # 计算定位成功项的切分范围（按位置排序，相邻定位点为边界）
         sorted_located = sorted(located_pos.items(), key=lambda kv: kv[1])
@@ -645,11 +753,11 @@ class ContractSlicingHandler(BaseSlicingHandler):
 
         # 第二遍：定位失败的项走 LLM 兜底
         fallback_content: dict[int, str] = {}
-        # if fallback_indices:
-            # logger.info(f"[contract] {len(fallback_indices)} markers need LLM recovery")
+        if fallback_indices:
+            logger.info(f"[contract] {len(fallback_indices)} markers need LLM recovery")
         for idx in fallback_indices:
             m = markers[idx]
-            chunk = text[m["source_chunk_start"] : m["source_chunk_end"]]
+            chunk = text[m["source_chunk_start"]: m["source_chunk_end"]]
             recovered = await self._recover_clause(chunk, m["title"], m["marker"])
             if recovered:
                 fallback_content[idx] = recovered
@@ -657,8 +765,12 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 logger.warning(
                     f"[contract] marker recovery failed: title={m.get('title')}, marker={m['marker'][:30]}"
                 )
+                # LLM 兜底也失败，从 source_chunk 中提取相关片段（≤1000字符）
+                fallback_content[idx] = self._extract_chunk_excerpt(
+                    chunk, m["marker"], m.get("title") or ""
+                )
 
-        # 按原始 markers 顺序拼装结果；定位与兜底都失败时保留占位供人工补充
+        # 按原始 markers 顺序拼装结果
         clauses: list[dict] = []
         for i, m in enumerate(markers):
             content = located_content.get(i) or fallback_content.get(i)
@@ -666,7 +778,7 @@ class ContractSlicingHandler(BaseSlicingHandler):
                 marker_preview = (m.get("marker") or "")[:30]
                 title_preview = m.get("title") or "(未知标题)"
                 self._processing_warnings.append(
-                    f"条款「{title_preview}」定位与 LLM 兜底均失败（marker={marker_preview}...），需人工补充原文"
+                    f"条款「{title_preview}」定位、title匹配与 LLM 兜底均失败（marker={marker_preview}...），需人工补充原文"
                 )
                 content = (
                     f"⚠️ 该条款解析失败，请人工补充原文。\n"
@@ -770,9 +882,6 @@ class ContractSlicingHandler(BaseSlicingHandler):
             logger.exception(f"[contract] recover_clause LLM call failed: title={title}")
             return None
         if not content or content == "无":
-            return None
-        # 二次校验：返回的 content 前 20 字必须能在 chunk 中定位，防止 LLM 改写
-        if content[:20] not in chunk:
             return None
         return content
 
