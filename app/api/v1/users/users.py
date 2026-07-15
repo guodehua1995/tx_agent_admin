@@ -23,7 +23,7 @@ async def list_user(
 ):
     q = Q()
     if username:
-        q &= Q(username__contains=username)
+        q &= Q(username__contains=username) | Q(alias__contains=username)
     if email:
         q &= Q(email__contains=email)
     if dept_id is not None:

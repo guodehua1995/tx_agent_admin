@@ -18,7 +18,7 @@
             v-model:value="loginInfo.username"
             autofocus
             class="h-50 items-center pl-10 text-16"
-            placeholder="admin"
+            placeholder="登录名/姓名"
             :maxlength="20"
           />
         </div>

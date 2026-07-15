@@ -67,7 +67,14 @@ onMounted(() => {
 
 const columns = [
   {
-    title: '名称',
+    title: '姓名',
+    key: 'alias',
+    width: 60,
+    align: 'center',
+    ellipsis: { tooltip: true },
+  },
+  {
+    title: '登录名',
     key: 'username',
     width: 60,
     align: 'center',
@@ -295,7 +302,7 @@ const validateAddUser = {
   username: [
     {
       required: true,
-      message: '请输入名称',
+      message: '请输入登录名',
       trigger: ['input', 'blur'],
     },
   ],
@@ -388,12 +395,12 @@ const validateAddUser = {
           :get-data="api.getUserList"
         >
           <template #queryBar>
-            <QueryBarItem label="名称" :label-width="40">
+            <QueryBarItem label="姓名" :label-width="40">
               <NInput
                 v-model:value="queryItems.username"
                 clearable
                 type="text"
-                placeholder="请输入用户名称"
+                placeholder="搜索姓名/登录名"
                 @keypress.enter="$table?.handleSearch()"
               />
             </QueryBarItem>
@@ -424,8 +431,16 @@ const validateAddUser = {
             :model="modalForm"
             :rules="validateAddUser"
           >
-            <NFormItem label="用户名称" path="username">
-              <NInput v-model:value="modalForm.username" clearable placeholder="请输入用户名称" />
+            <NFormItem label="登录名" path="username">
+              <NInput
+                v-model:value="modalForm.username"
+                clearable
+                placeholder="请输入登录名"
+                :disabled="modalAction === 'edit'"
+              />
+            </NFormItem>
+            <NFormItem label="姓名" path="alias">
+              <NInput v-model:value="modalForm.alias" clearable placeholder="请输入姓名" />
             </NFormItem>
             <NFormItem label="邮箱" path="email">
               <NInput v-model:value="modalForm.email" clearable placeholder="请输入邮箱" />

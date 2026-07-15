@@ -19,6 +19,7 @@ class BaseUser(BaseModel):
 class UserCreate(BaseModel):
     email: EmailStr = Field(example="admin@qq.com")
     username: str = Field(example="admin")
+    alias: Optional[str] = Field(None, example="张三", description="姓名")
     password: str = Field(example="123456")
     is_active: Optional[bool] = True
     is_superuser: Optional[bool] = False
@@ -32,7 +33,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     id: int
     email: EmailStr
-    username: str
+    alias: Optional[str] = Field(None, description="姓名")
     is_active: Optional[bool] = True
     is_superuser: Optional[bool] = False
     role_ids: Optional[List[int]] = []
